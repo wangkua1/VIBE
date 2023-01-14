@@ -13,9 +13,10 @@
 # for Intelligent Systems. All rights reserved.
 #
 # Contact: ps-license@tuebingen.mpg.de
-
+import torch  # otherwise `get_smpl_faces` might cause Seg Fault
 import math
 import trimesh
+# os.environ['PYOPENGL_PLATFORM'] = 'osmesa'
 import pyrender
 import numpy as np
 from pyrender.constants import RenderFlags
@@ -50,7 +51,6 @@ class WeakPerspectiveCamera(pyrender.Camera):
 class Renderer:
     def __init__(self, resolution=(224,224), orig_img=False, wireframe=False):
         self.resolution = resolution
-
         self.faces = get_smpl_faces()
         self.orig_img = orig_img
         self.wireframe = wireframe
@@ -74,6 +74,8 @@ class Renderer:
 
         light_pose[:3, 3] = [1, 1, 2]
         self.scene.add(light, pose=light_pose)
+
+
 
     def render(self, img, verts, cam, angle=None, axis=None, mesh_filename=None, color=[1.0, 1.0, 0.9]):
 
@@ -105,10 +107,12 @@ class Renderer:
 
         mesh = pyrender.Mesh.from_trimesh(mesh, material=material)
 
+        # import ipdb; ipdb.set_trace()
+        # Somehow the line below breaks validation
         mesh_node = self.scene.add(mesh, 'mesh')
 
         camera_pose = np.eye(4)
-        cam_node = self.scene.add(camera, pose=camera_pose)
+        cam_node = self.scene.add(camera, pose=camera_pose)        
 
         if self.wireframe:
             render_flags = RenderFlags.RGBA | RenderFlags.ALL_WIREFRAME
@@ -116,10 +120,17 @@ class Renderer:
             render_flags = RenderFlags.RGBA
 
         rgb, _ = self.renderer.render(self.scene, flags=render_flags)
-        valid_mask = (rgb[:, :, -1] > 0)[:, :, np.newaxis]
-        output_img = rgb[:, :, :-1] * valid_mask + (1 - valid_mask) * img
+        if rgb.shape[-1] == 4:
+            valid_mask = (rgb[:, :, -1] > 0)[:, :, np.newaxis]
+            output_img = rgb[:, :, :-1] * valid_mask + (1 - valid_mask) * img
+        elif rgb.shape[-1] == 3: # Offscreen rendering only produces 3-channel images
+            valid_mask = (rgb.sum(-1) > 0)[:, :, np.newaxis]
+            output_img = rgb[:, :, :] * valid_mask + (1 - valid_mask) * img
+        else:
+            raise # ... unknown shape    
         image = output_img.astype(np.uint8)
 
+        # Due to above error
         self.scene.remove_node(mesh_node)
         self.scene.remove_node(cam_node)
 

@@ -22,36 +22,73 @@ import numpy as np
 import os.path as osp
 
 
+# def run_openpose(
+#         video_file,
+#         output_folder,
+#         staf_folder,
+#         vis=False,
+# ):
+#     pwd = os.getcwd()
+
+#     os.chdir(staf_folder)
+
+#     render = 1 if vis else 0
+#     display = 2 if vis else 0
+#     cmd = [
+#         'build/examples/openpose/openpose.bin',
+#         '--model_pose', 'BODY_21A',
+#         '--tracking', '1',
+#         '--render_pose', str(render),
+#         '--video', video_file,
+#         '--write_json', output_folder,
+#         '--display', str(display)
+#     ]
+
+#     print('Executing', ' '.join(cmd))
+#     subprocess.call(cmd)
+#     os.chdir(pwd)
+
 def run_openpose(
         video_file,
         output_folder,
         staf_folder,
         vis=False,
 ):
-    pwd = os.getcwd()
+    TMP_DIR = osp.split(video_file)[0]
 
-    os.chdir(staf_folder)
+    # Move video to tmp dir
+    video_fname = osp.split(video_file)[1]
+    out_video_path = osp.join(TMP_DIR, video_fname)
+    subprocess.run(['cp', video_file, out_video_path])
+    subprocess.run(['mkdir', osp.join(TMP_DIR, video_fname+'_results')])
 
-    render = 1 if vis else 0
-    display = 2 if vis else 0
-    cmd = [
-        'build/examples/openpose/openpose.bin',
-        '--model_pose', 'BODY_21A',
+    run_cmds = [
+        'singularity', 'exec', '--pwd', 'openpose', '--nv', '--bind',
+        f"{TMP_DIR}:/mnt",
+        "/home/groups/syyeung/wangkua1/software/openpose.sif",
+        "./build/examples/openpose/openpose.bin",
+        "--video", f"/mnt/{video_fname}",
+        "--write_json", f"/mnt/{video_fname+'_results'}",
+        "--display", "0",
+        '--render_pose', '0',
         '--tracking', '1',
-        '--render_pose', str(render),
-        '--video', video_file,
-        '--write_json', output_folder,
-        '--display', str(display)
+        '--model_pose', 'BODY_25',
+        '--number_people_max', '1'
     ]
-
-    print('Executing', ' '.join(cmd))
-    subprocess.call(cmd)
-    os.chdir(pwd)
+    print(run_cmds)
+    subprocess.run(run_cmds)
+    # Copy results to output_folder
+    subprocess.run(['mkdir', '-p', output_folder])
+    subprocess.run(['cp', '-r', osp.join(TMP_DIR, video_fname+'_results'), output_folder])
 
 
 def read_posetrack_keypoints(output_folder):
 
     people = dict()
+
+    # ....
+    child_folder = os.listdir(output_folder)[0]
+    output_folder = osp.join(output_folder, child_folder)
 
     for idx, result_file in enumerate(sorted(os.listdir(output_folder))):
         json_file = osp.join(output_folder, result_file)

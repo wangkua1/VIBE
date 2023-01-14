@@ -1,3 +1,6 @@
+*.obj
+slurm_logs/
+ipynb/
 .idea/
 data
 __pycache__/

@@ -15,7 +15,7 @@
 # Contact: ps-license@tuebingen.mpg.de
 
 import os
-os.environ['PYOPENGL_PLATFORM'] = 'egl'
+# os.environ['PYOPENGL_PLATFORM'] = 'egl'
 
 import cv2
 import time
@@ -271,83 +271,83 @@ def main(args):
 
     joblib.dump(vibe_results, os.path.join(output_path, "vibe_output.pkl"))
 
-    if not args.no_render:
-        # ========= Render results as a single video ========= #
-        renderer = Renderer(resolution=(orig_width, orig_height), orig_img=True, wireframe=args.wireframe)
+    # if not args.no_render:
+    #     # ========= Render results as a single video ========= #
+    #     renderer = Renderer(resolution=(orig_width, orig_height), orig_img=True, wireframe=args.wireframe)
 
-        output_img_folder = f'{image_folder}_output'
-        os.makedirs(output_img_folder, exist_ok=True)
+    #     output_img_folder = f'{image_folder}_output'
+    #     os.makedirs(output_img_folder, exist_ok=True)
 
-        print(f'Rendering output video, writing frames to {output_img_folder}')
+    #     print(f'Rendering output video, writing frames to {output_img_folder}')
 
-        # prepare results for rendering
-        frame_results = prepare_rendering_results(vibe_results, num_frames)
-        mesh_color = {k: colorsys.hsv_to_rgb(np.random.rand(), 0.5, 1.0) for k in vibe_results.keys()}
+    #     # prepare results for rendering
+    #     frame_results = prepare_rendering_results(vibe_results, num_frames)
+    #     mesh_color = {k: colorsys.hsv_to_rgb(np.random.rand(), 0.5, 1.0) for k in vibe_results.keys()}
 
-        image_file_names = sorted([
-            os.path.join(image_folder, x)
-            for x in os.listdir(image_folder)
-            if x.endswith('.png') or x.endswith('.jpg')
-        ])
+    #     image_file_names = sorted([
+    #         os.path.join(image_folder, x)
+    #         for x in os.listdir(image_folder)
+    #         if x.endswith('.png') or x.endswith('.jpg')
+    #     ])
 
-        for frame_idx in tqdm(range(len(image_file_names))):
-            img_fname = image_file_names[frame_idx]
-            img = cv2.imread(img_fname)
+    #     for frame_idx in tqdm(range(len(image_file_names))):
+    #         img_fname = image_file_names[frame_idx]
+    #         img = cv2.imread(img_fname)
 
-            if args.sideview:
-                side_img = np.zeros_like(img)
+    #         if args.sideview:
+    #             side_img = np.zeros_like(img)
 
-            for person_id, person_data in frame_results[frame_idx].items():
-                frame_verts = person_data['verts']
-                frame_cam = person_data['cam']
+    #         for person_id, person_data in frame_results[frame_idx].items():
+    #             frame_verts = person_data['verts']
+    #             frame_cam = person_data['cam']
 
-                mc = mesh_color[person_id]
+    #             mc = mesh_color[person_id]
 
-                mesh_filename = None
+    #             mesh_filename = None
 
-                if args.save_obj:
-                    mesh_folder = os.path.join(output_path, 'meshes', f'{person_id:04d}')
-                    os.makedirs(mesh_folder, exist_ok=True)
-                    mesh_filename = os.path.join(mesh_folder, f'{frame_idx:06d}.obj')
+    #             if args.save_obj:
+    #                 mesh_folder = os.path.join(output_path, 'meshes', f'{person_id:04d}')
+    #                 os.makedirs(mesh_folder, exist_ok=True)
+    #                 mesh_filename = os.path.join(mesh_folder, f'{frame_idx:06d}.obj')
 
-                img = renderer.render(
-                    img,
-                    frame_verts,
-                    cam=frame_cam,
-                    color=mc,
-                    mesh_filename=mesh_filename,
-                )
+    #             img = renderer.render(
+    #                 img,
+    #                 frame_verts,
+    #                 cam=frame_cam,
+    #                 color=mc,
+    #                 mesh_filename=mesh_filename,
+    #             )
 
-                if args.sideview:
-                    side_img = renderer.render(
-                        side_img,
-                        frame_verts,
-                        cam=frame_cam,
-                        color=mc,
-                        angle=270,
-                        axis=[0,1,0],
-                    )
+    #             if args.sideview:
+    #                 side_img = renderer.render(
+    #                     side_img,
+    #                     frame_verts,
+    #                     cam=frame_cam,
+    #                     color=mc,
+    #                     angle=270,
+    #                     axis=[0,1,0],
+    #                 )
 
-            if args.sideview:
-                img = np.concatenate([img, side_img], axis=1)
+    #         if args.sideview:
+    #             img = np.concatenate([img, side_img], axis=1)
 
-            cv2.imwrite(os.path.join(output_img_folder, f'{frame_idx:06d}.png'), img)
+    #         cv2.imwrite(os.path.join(output_img_folder, f'{frame_idx:06d}.png'), img)
 
-            if args.display:
-                cv2.imshow('Video', img)
-                if cv2.waitKey(1) & 0xFF == ord('q'):
-                    break
+    #         if args.display:
+    #             cv2.imshow('Video', img)
+    #             if cv2.waitKey(1) & 0xFF == ord('q'):
+    #                 break
 
-        if args.display:
-            cv2.destroyAllWindows()
+    #     if args.display:
+    #         cv2.destroyAllWindows()
 
-        # ========= Save rendered video ========= #
-        vid_name = os.path.basename(video_file)
-        save_name = f'{vid_name.replace(".mp4", "")}_vibe_result.mp4'
-        save_name = os.path.join(output_path, save_name)
-        print(f'Saving result video to {save_name}')
-        images_to_video(img_folder=output_img_folder, output_vid_file=save_name)
-        shutil.rmtree(output_img_folder)
+    #     # ========= Save rendered video ========= #
+    #     vid_name = os.path.basename(video_file)
+    #     save_name = f'{vid_name.replace(".mp4", "")}_vibe_result.mp4'
+    #     save_name = os.path.join(output_path, save_name)
+    #     print(f'Saving result video to {save_name}')
+    #     images_to_video(img_folder=output_img_folder, output_vid_file=save_name)
+    #     shutil.rmtree(output_img_folder)
 
     shutil.rmtree(image_folder)
     print('================= END =================')

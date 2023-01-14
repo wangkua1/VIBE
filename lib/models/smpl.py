@@ -5,7 +5,7 @@ import torch
 import numpy as np
 import os.path as osp
 from smplx import SMPL as _SMPL
-from smplx.utils import ModelOutput, SMPLOutput
+from smplx.utils import  SMPLOutput
 from smplx.lbs import vertices2joints
 
 from lib.core.config import VIBE_DATA_DIR

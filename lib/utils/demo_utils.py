@@ -85,7 +85,7 @@ def preprocess_video(video, joints2d, bboxes, frames, scale=1.0, crop_size=224):
 
 
 def download_youtube_clip(url, download_folder):
-    return YouTube(url).streams.first().download(output_path=download_folder)
+    return YouTube(url).streams.filter(res='360p').first().download(output_path=download_folder)
 
 
 def smplify_runner(

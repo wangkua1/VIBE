@@ -80,6 +80,12 @@ Then, running the demo is as simple as:
 # Run on a local video
 python demo.py --vid_file sample_video.mp4 --output_folder output/ --display
 
+python demo.py --vid_file /home/users/wangkua1/documents/jackson_tennis/jacksion-tennis-orig-trimmed.mp4 --output_folder output/jackson_tennis
+
+python demo.py --vid_file "/scratch/users/wangkua1/data/vibe_test_h36m/Directions.54138969.mp4" --output_folder output/h36m
+
+python demo.py --vid_file "/scratch/users/wangkua1/data/S1/Videos/WalkingDog 1.54138969.mp4" --output_folder output/h36m-walkingdog
+
 # Run on a YouTube video
 python demo.py --vid_file https://www.youtube.com/watch?v=wPZP8Bwxplo --output_folder output/ --display
 ```
