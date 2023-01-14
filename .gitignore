@@ -2,7 +2,6 @@
 slurm_logs/
 ipynb/
 .idea/
-data
 __pycache__/
 vibe-env/
 output/
