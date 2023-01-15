@@ -25,12 +25,12 @@ TRAIN:
   LR_PATIENCE: 5
   DATA_2D_RATIO: 0.6
   DATASETS_2D:
-    - 'Insta'
+    # - 'Insta'
 #    - 'PoseTrack'
-#    - 'PennAction'
+   - 'PennAction'
   DATASETS_3D:
-#    - 'ThreeDPW'
-    - 'MPII3D'
+   - 'ThreeDPW'
+    # - 'MPII3D'
   DATASET_EVAL: 'ThreeDPW'
   GEN_LR: 0.00005
   GEN_WD: 0.0

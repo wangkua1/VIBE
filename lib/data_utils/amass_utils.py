@@ -14,6 +14,9 @@
 #
 # Contact: ps-license@tuebingen.mpg.de
 
+import sys
+sys.path.append('.')
+
 import os
 import joblib
 import argparse
@@ -140,6 +143,8 @@ def read_seq_data(folder, nsubjects, fps):
     return train_set, test_set
 
 if __name__ == '__main__':
+
+
     parser = argparse.ArgumentParser()
     parser.add_argument('--dir', type=str, help='dataset directory', default='data/amass')
     args = parser.parse_args()
