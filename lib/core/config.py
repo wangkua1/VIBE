@@ -16,17 +16,20 @@
 
 import argparse
 from yacs.config import CfgNode as CN
+import os
+import os.path as osp
 
+ROOT = osp.join(os.environ['BIO_POSE_ROOT'], 'VIBE')
 # CONSTANTS
 # You may modify them at will
-VIBE_DB_DIR = 'data/vibe_db'
-AMASS_DIR = 'data/amass'
-INSTA_DIR = 'data/insta_variety'
-MPII3D_DIR = 'data/mpi_inf_3dhp'
-THREEDPW_DIR = 'data/3dpw'
-PENNACTION_DIR = 'data/penn_action'
-POSETRACK_DIR = 'data/posetrack'
-VIBE_DATA_DIR = 'data/vibe_data'
+VIBE_DB_DIR = osp.join(ROOT, 'data/vibe_db')
+AMASS_DIR = osp.join(ROOT, 'data/amass')
+INSTA_DIR = osp.join(ROOT, 'data/insta_variety')
+MPII3D_DIR = osp.join(ROOT, 'data/mpi_inf_3dhp')
+THREEDPW_DIR = osp.join(ROOT, 'data/3dpw')
+PENNACTION_DIR = osp.join(ROOT, 'data/penn_action')
+POSETRACK_DIR = osp.join(ROOT, 'data/posetrack')
+VIBE_DATA_DIR = osp.join(ROOT, 'data/vibe_data')
 
 # Configuration variables
 cfg = CN()
