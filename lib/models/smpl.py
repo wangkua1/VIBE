@@ -1,6 +1,7 @@
 # This script is borrowed and extended from https://github.com/nkolot/SPIN/blob/master/models/hmr.py
 # Adhere to their licence to use this script
 
+import ipdb
 import torch
 import numpy as np
 import os.path as osp
@@ -80,6 +81,7 @@ class SMPL(_SMPL):
                             joints=joints,
                             betas=smpl_output.betas,
                             full_pose=smpl_output.full_pose)
+        output.smpl_joints = smpl_output.joints
         return output
 
 
