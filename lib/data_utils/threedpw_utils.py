@@ -138,6 +138,7 @@ def read_data(folder, set, debug=False):
             dataset['joints2D'].append(j2d[time_pt1:time_pt2])
             dataset['shape'].append(shape.numpy()[time_pt1:time_pt2])
             dataset['pose'].append(pose.numpy()[time_pt1:time_pt2])
+            dataset['trans'].append(trans.numpy()[time_pt1:time_pt2])
             dataset['bbox'].append(bbox)
             dataset['valid'].append(campose_valid[time_pt1:time_pt2])
 

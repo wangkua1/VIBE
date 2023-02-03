@@ -87,6 +87,7 @@ class Dataset3D(Dataset):
         if self.dataset_name == '3dpw':
             pose  = self.db['pose'][start_index:end_index+1]
             shape = self.db['shape'][start_index:end_index+1]
+            trans_ = self.db['trans'][start_index:end_index+1]
             w_smpl = torch.ones(self.seqlen).float()
             w_3d = torch.ones(self.seqlen).float()
         elif self.dataset_name == 'h36m':
@@ -149,6 +150,9 @@ class Dataset3D(Dataset):
             vn = self.db['vid_name'][start_index:end_index + 1]
             fi = self.db['frame_id'][start_index:end_index + 1]
             target['instance_id'] = [f'{v}/{f}'for v,f in zip(vn,fi)]
+
+        if self.dataset_name == '3dpw':
+            target['trans'] = torch.from_numpy(trans_).float()
 
 
 
