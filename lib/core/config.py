@@ -29,6 +29,7 @@ MPII3D_DIR = osp.join(ROOT, 'data/mpi_inf_3dhp')
 THREEDPW_DIR = osp.join(ROOT, 'data/3dpw')
 PENNACTION_DIR = osp.join(ROOT, 'data/penn_action')
 POSETRACK_DIR = osp.join(ROOT, 'data/posetrack')
+H36M_DIR = osp.join(ROOT, 'data/h36m')
 VIBE_DATA_DIR = osp.join(ROOT, 'data/vibe_data')
 
 # Configuration variables
