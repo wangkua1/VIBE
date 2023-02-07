@@ -48,6 +48,7 @@ class AMASS(Dataset):
     def get_single_item(self, index):
         start_index, end_index = self.vid_indices[index]
         thetas = self.db['theta'][start_index:end_index+1]
+        trans = self.db['trans'][start_index:end_index+1]
 
         cam = np.array([1., 0., 0.])[None, ...]
         cam = np.repeat(cam, thetas.shape[0], axis=0)
@@ -55,6 +56,7 @@ class AMASS(Dataset):
 
         target = {
             'theta': torch.from_numpy(theta).float(),  # cam, pose and shape
+            'trans': torch.from_numpy(trans).float(),  # root translation
         }
         return target
 
