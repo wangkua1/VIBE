@@ -62,6 +62,7 @@ def read_data(folder, sequences):
 
     db = {
         'theta': [],
+        'trans': [],
         'vid_name': [],
     }
 
@@ -69,13 +70,15 @@ def read_data(folder, sequences):
         print(f'Reading {seq_name} sequence...')
         seq_folder = osp.join(folder, seq_name)
 
-        thetas, vid_names = read_single_sequence(seq_folder, seq_name)
+        thetas, transes, vid_names = read_single_sequence(seq_folder, seq_name)
         seq_name_list = np.array([seq_name]*thetas.shape[0])
         print(seq_name, 'number of videos', thetas.shape[0])
         db['theta'].append(thetas)
+        db['trans'].append(transes)
         db['vid_name'].append(vid_names)
 
     db['theta'] = np.concatenate(db['theta'], axis=0)
+    db['trans'] = np.concatenate(db['trans'], axis=0)
     db['vid_name'] = np.concatenate(db['vid_name'], axis=0)
 
     return db
@@ -86,8 +89,8 @@ def read_single_sequence(folder, seq_name, fps=25):
     subjects = os.listdir(folder)
 
     thetas = []
+    transes = []
     vid_names = []
-
     for subject in tqdm(subjects):
         actions = [x for x in os.listdir(osp.join(folder, subject)) if x.endswith('.npz')]
 
@@ -102,6 +105,7 @@ def read_single_sequence(folder, seq_name, fps=25):
             mocap_framerate = int(data['mocap_framerate'])
             sampling_freq = mocap_framerate // fps
             pose = data['poses'][0::sampling_freq, joints_to_use]
+            trans = data['trans'][0::sampling_freq]
 
             if pose.shape[0] < 60:
                 continue
@@ -112,8 +116,9 @@ def read_single_sequence(folder, seq_name, fps=25):
 
             vid_names.append(vid_name)
             thetas.append(theta)
+            transes.append(trans)
 
-    return np.concatenate(thetas, axis=0), np.concatenate(vid_names, axis=0)
+    return np.concatenate(thetas, axis=0), np.concatenate(transes, axis=0), np.concatenate(vid_names, axis=0)
 
 
 def read_seq_data(folder, nsubjects, fps):
