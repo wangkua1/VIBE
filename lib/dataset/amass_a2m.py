@@ -36,8 +36,13 @@ class AMASS(Dataset):
 
         self.db = self.load_db()
         self.vid_indices = split_into_chunks(self.db['vid_name'], self.seqlen, self.stride)
-        del self.db['vid_name']
+        # del self.db['vid_name']
         print(f'AMASS dataset number of videos: {len(self.vid_indices)}')
+
+    def create_db_6d_upfront():
+        raise NotImplementedError()
+        if hasattr(self, "db_6d"):
+            return
 
     def __len__(self):
         return len(self.vid_indices)
@@ -51,11 +56,20 @@ class AMASS(Dataset):
         return db
 
     def get_single_item(self, index):
+        # import ipdb; ipdb.set_trace()
         start_index, end_index = self.vid_indices[index]
-        theta = torch.tensor(self.db['theta'][start_index:end_index+1])
+        thetas = torch.tensor(self.db['theta'][start_index:end_index+1])
         trans = torch.tensor(self.db['trans'][start_index:end_index+1])
 
-        pose = theta[...,3:75]     # (T,72)
+        # like in amass dataset, concat a [1,0,0]: camera orientation (it will be)
+        # removed, this is just for consistency
+        cam = np.array([1., 0., 0.])[None, ...]
+        cam = np.repeat(cam, thetas.shape[0], axis=0)
+        thetas = np.concatenate([cam, thetas], axis=-1)
+        thetas = torch.tensor(thetas)
+
+        ### now get the required pose vector
+        pose = thetas[...,3:75]     # (T,72)
         pose = pose.view(pose.shape[0], 24, 3) # (T,24,3)
         ## convert it to 6d representation that we need for the model 
         pose_6d = rotation_conversions.matrix_to_rotation_6d(
