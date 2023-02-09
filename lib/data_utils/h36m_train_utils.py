@@ -1,14 +1,20 @@
 import os
+import os.path as osp
 import sys
 import cv2
 import glob
 import h5py
+import pickle as pkl
+import ipdb
 import numpy as np
 import argparse
 from tqdm import tqdm
 #from spacepy import pycdf
 import cdflib
-# from .read_openpose import read_openpose
+
+# VIBE related
+from lib.core.config import VIBE_DB_DIR, VIBE_DATA_DIR, H36M_DIR
+
 
 ACTIONS = [
     "Directions 1", "Directions", "Discussion 1", "Discussion", "Eating 2",
@@ -360,17 +366,12 @@ def h36m_train_extract_original_example(dataset_path,
                         break
                 # check if you can keep this frame
                 protocol = 1
-                if frame_i % 5 == 0 and (protocol == 1
+                if frame_i % 1 == 0 and (protocol == 1
                                          or camera == '60457274'):
                     # image name
                     imgname = '%s_%s.%s_%06d.jpg' % (user_name, action, camera,
                                                      frame_i + 1)
 
-                    # save image
-                    if extract_img:
-                        img_out = os.path.join(imgs_path, imgname)
-                        cv2.imwrite(img_out, image)
-                        #continue
                     # read GT bounding box
                     mask = bbox_h5py[bbox_h5py['Masks'][frame_i, 0]][()].T
                     ys, xs = np.where(mask == 1)
@@ -406,6 +407,8 @@ def h36m_train_extract_original_example(dataset_path,
                     openpose = read_openpose(json_file, part, 'h36m')
 
                     # store data
+                    dataset['img_name'].append(imgname)
+
                     imgnames_.append(os.path.join('images', imgname))
                     centers_.append(center)
                     scales_.append(scale)
@@ -427,19 +430,29 @@ def h36m_train_extract_original_example(dataset_path,
 
 
 if __name__ == '__main__':
-    dataset_path = "/oak/stanford/groups/syyeung/hmr_datasets/h36m"
-    out_path = '.'
-    extract_img = True
+    """
+    python -m VIBE.lib.data_utils.h36m_train_utils
+    """
+    dataset_path = H36M_DIR
 
+    mosh_dir = osp.join(dataset_path, 'mosh/neutrMosh/neutrSMPL_H3.6/')
+    # e.g. osp.join(mosh_dir, "S1", "SittingDown 2_cam0_aligned.pkl")
+    
     # convert joints to global order
     h36m_idx = [11, 6, 7, 8, 1, 2, 3, 12, 24, 14, 15, 17, 18, 19, 25, 26, 27]
     global_idx = [14, 3, 4, 5, 2, 1, 0, 16, 12, 17, 18, 9, 10, 11, 8, 7, 6]
 
-    # structs we use
-    imgnames_, scales_, centers_, parts_, Ss_, openposes_  = [], [], [], [], [], []
+    # Output
+    dataset = {
+        'img_name': [],
+        'joints3D': [],
+        'joints2D': [],
+        'shape': [],
+        'pose': [],
+        'bbox': [],
+        'features': [],
+    }
 
-    # users in validation set
-    # user_list = [1, 5, 6, 7, 8]
     user_list = [1]
 
     # go over each user
@@ -465,15 +478,12 @@ if __name__ == '__main__':
         seq_list = glob.glob(os.path.join(pose_path, '*.cdf'))
         seq_list.sort()
         for seq_i in seq_list:
-            if 'walking' not in seq_i.lower() or 'dog' in seq_i.lower():
-                continue
-
             print('\tSeq:', seq_i)
             sys.stdout.flush()
             # sequence info
             seq_name = seq_i.split('/')[-1]
-            action, camera, _ = seq_name.split('.')
-            action = action.replace(' ', '_')
+            action_w_space, camera, _ = seq_name.split('.')
+            action = action_w_space.replace(' ', '_')
 
             # irrelevant sequences
             if action == '_ALL':
@@ -490,22 +500,15 @@ if __name__ == '__main__':
             bbox_file = os.path.join(bbox_path, seq_name.replace('cdf', 'mat'))
             bbox_h5py = h5py.File(bbox_file)
 
-            # video file
-            if extract_img:
-                vid_file = os.path.join(vid_path,
-                                        seq_name.replace('cdf', 'mp4'))
-                imgs_path = os.path.join(dataset_path, 'images')
-                os.makedirs(imgs_path, exist_ok=True)
-                vidcap = cv2.VideoCapture(vid_file)
+            # Mosh 
+            cam_id = CAMERAS.index(camera)
+            mosh_path = osp.join(mosh_dir, user_name, f"{action_w_space}_cam{cam_id}_aligned.pkl")
+            mosh = pkl.load(open(mosh_path, 'rb'), encoding="latin1")
+
+            ipdb.set_trace()
 
             # go over each frame of the sequence
             for frame_i in tqdm(range(poses_3d.shape[0])):
-                # read video frame
-                if extract_img:
-                    success, image = vidcap.read()
-                    if not success:
-                        break
-                # check if you can keep this frame
                 protocol = 1
                 if frame_i % 5 == 0 and (protocol == 1
                                          or camera == '60457274'):
@@ -513,11 +516,9 @@ if __name__ == '__main__':
                     imgname = '%s_%s.%s_%06d.jpg' % (user_name, action, camera,
                                                      frame_i + 1)
 
-                    # save image
-                    if extract_img:
-                        img_out = os.path.join(imgs_path, imgname)
-                        cv2.imwrite(img_out, image)
-                        #continue
+                    img_path = osp.join(dataset_path, 'images', imgname)
+
+                    ipdb.set_trace()
                     # read GT bounding box
                     mask = bbox_h5py[bbox_h5py['Masks'][frame_i, 0]][()].T
                     ys, xs = np.where(mask == 1)
@@ -546,28 +547,15 @@ if __name__ == '__main__':
                     S24[global_idx, :3] = S17
                     S24[global_idx, 3] = 1
 
-                    # import ipdb; ipdb.set_trace()
-                    # # read openpose detections
-                    # json_file = os.path.join(openpose_path,
-                    #     imgname.replace('.jpg', '_keypoints.json'))
-                    # openpose = read_openpose(json_file, part, 'h36m')
 
                     # store data
-                    imgnames_.append(os.path.join('images', imgname))
-                    centers_.append(center)
-                    scales_.append(scale)
-                    parts_.append(part)
-                    Ss_.append(S24)
+                    dataset['img_name'].append(os.path.join('images', imgname))
+                    dataset['joints3D'].append(j3d)
+                    dataset['joints3D'].append(j2d)
+                    dataset['shape'].append(shape)
+                    dataset['pose'].append(pose)
+                    dataset['bbox'].append(bbox)
+                    dataset['features'].append(features)
 
     # store the data struct
-    if not os.path.isdir(out_path):
-        os.makedirs(out_path)
-    out_file = os.path.join(out_path, 'h36m_dev_walking.npz')
-    np.savez(out_file,
-             imgname=imgnames_,
-             center=centers_,
-             scale=scales_,
-             part=parts_,
-             S=Ss_,
-             openpose=openposes_)
-
+    out_file = os.path.join(VIBE_DB_DIR, 'h36m_dev_walking.npz')

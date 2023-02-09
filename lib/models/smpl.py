@@ -11,6 +11,48 @@ from smplx.lbs import vertices2joints
 
 from lib.core.config import VIBE_DATA_DIR
 
+# Taken from: https://github.com/vchoutas/smplx/blob/main/smplx/joint_names.py
+
+SMPL_JOINT_NAMES = [
+    "pelvis",
+    "left_hip",
+    "right_hip",
+    "spine1",
+    "left_knee",
+    "right_knee",
+    "spine2",
+    "left_ankle",
+    "right_ankle",
+    "spine3",
+    "left_foot",
+    "right_foot",
+    "neck",
+    "left_collar",
+    "right_collar",
+    "head",
+    "left_shoulder",
+    "right_shoulder",
+    "left_elbow",
+    "right_elbow",
+    "left_wrist",
+    "right_wrist",
+    "left_hand",
+    "right_hand",
+]
+
+# JOINT_NAMES[25:39]
+J14_NAMES = ['Right Ankle', 'Right Knee', 'Right Hip', 'Left Hip', 'Left Knee', 'Left Ankle', 'Right Wrist', 'Right Elbow', 'Right Shoulder', 'Left Shoulder', 'Left Elbow', 'Left Wrist', 'Neck (LSP)', 'Top of Head (LSP)']
+
+
+SMPL_TO_J14 = [8, 5, 2, 1, 4, 7, 21, 19, 17, 16, 18, 20, 12, 15]
+"""
+Looks good
+ipdb> np.array(SMPL_JOINT_NAMES)[np.array(SMPL_TO_J14)]
+array(['right_ankle', 'right_knee', 'right_hip', 'left_hip', 'left_knee',
+       'left_ankle', 'right_wrist', 'right_elbow', 'right_shoulder',
+       'left_shoulder', 'left_elbow', 'left_wrist', 'neck', 'head'],
+"""
+
 # Map joints to SMPL joints
 JOINT_MAP = {
     'OP Nose': 24, 'OP Neck': 12, 'OP RShoulder': 17,
@@ -51,6 +93,9 @@ JOINT_NAMES = [
     'Right Eye', 'Left Ear', 'Right Ear'
 ]
 
+
+
+
 JOINT_IDS = {JOINT_NAMES[i]: i for i in range(len(JOINT_NAMES))}
 JOINT_REGRESSOR_TRAIN_EXTRA = osp.join(VIBE_DATA_DIR, 'J_regressor_extra.npy')
 SMPL_MEAN_PARAMS = osp.join(VIBE_DATA_DIR, 'smpl_mean_params.npz')
@@ -58,6 +103,13 @@ SMPL_MODEL_DIR = VIBE_DATA_DIR
 H36M_TO_J17 = [6, 5, 4, 1, 2, 3, 16, 15, 14, 11, 12, 13, 8, 10, 0, 7, 9]
 H36M_TO_J14 = H36M_TO_J17[:14]
 
+
+"""
+joint_map = tensor([
+24, 12, 17, 19, 21, 16, 18, 20,  0,  2,  5,  8,  1,  4,  7, 25, 26, 27,
+        28, 29, 30, 31, 32, 33, 34,  8,  5, 45, 46,  4,  7, 21, 19, 17, 16, 18,
+        20, 47, 48, 49, 50, 51, 52, 53, 24, 26, 25, 28, 27])
+"""
 
 class SMPL(_SMPL):
     """ Extension of the official SMPL implementation to support more joints """
