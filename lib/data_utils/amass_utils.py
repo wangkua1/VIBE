@@ -147,14 +147,61 @@ def read_seq_data(folder, nsubjects, fps):
 
     return train_set, test_set
 
+def add_joints_xyz_to_db(db, create_transl=True):
+    """ For a `db` with `theta`, `trans` alread"""
+    from lib.models.smpl import SMPL, SMPL_MODEL_DIR, H36M_TO_J14, SMPL_MEAN_PARAMS, SMPL_TO_J14
+    import torch
+    from torch.utils.data import DataLoader, TensorDataset
+
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    batch_size=1024
+    dset = TensorDataset(
+        torch.tensor(db['theta']).float().to(device), 
+        torch.tensor(db['trans']).float().to(device)
+        )
+    loader = DataLoader(dset, batch_size=batch_size, shuffle=False, drop_last=False)
+    smpl = SMPL(SMPL_MODEL_DIR, batch_size=batch_size, create_transl=True).to(device)
+
+    print("Getting joints xyz")
+    with torch.no_grad():
+        joints_xyz = []
+        import tqdm
+        for thetas, trans in tqdm.tqdm(loader):
+            joints = smpl(betas=thetas[...,72:],
+                        body_pose=thetas[...,3:72],
+                        global_orient=thetas[...,:3],
+                        transl=trans,
+            )
+            joints_xyz.append(joints.smpl_joints[:,:24])
+        joints_xyz = torch.cat(joints_xyz).cpu()
+
+    DEBUG=False
+    if DEBUG:
+        from gthmr.lib.utils.mdm_utils import viz_motions
+        start = 0
+        seqlen = 120
+        N=16
+        
+        joints_xyz_plot = joints_xyz[:(N*seqlen)].contiguous().view(N,seqlen,24,3).permute(0,2,3,1)
+        logdir = "/home/groups/syyeung/jmhb/bio-pose/gthmr/results/tmp"
+        viz_motions(N, 1, logdir, joints_xyz_plot.numpy(), 
+            dataset="humanact12", all_text=None)
+
+    db['joints3D'] = joints_xyz.contiguous()
+
+    return db
+
 if __name__ == '__main__':
-
-
     parser = argparse.ArgumentParser()
     parser.add_argument('--dir', type=str, help='dataset directory', default='data/amass')
+    parser.add_argument('--dont_record_xyz', help='if True, skip logging joint xyz positions', action='store_true', default=False)
     args = parser.parse_args()
 
-    db = read_data(args.dir, sequences=all_sequences)
     db_file = osp.join(VIBE_DB_DIR, 'amass_db.pt')
+    # db = joblib.load(db_file)     # load existing file
+    db = read_data(args.dir, sequences=all_sequences) # theta and trans 
+    if not args.dont_record_xyz:
+        db = add_joints_xyz_to_db(db) # xyz joints 
+
     print(f'Saving AMASS dataset to {db_file}')
     joblib.dump(db, db_file)

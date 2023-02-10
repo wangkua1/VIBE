@@ -21,9 +21,10 @@
 import torch
 import joblib
 import numpy as np
-import os.path as osp
+
 from torch.utils.data import Dataset
 
+import os.path as osp
 from mdm.utils import rotation_conversions
 from lib.core.config import VIBE_DB_DIR
 from lib.data_utils.img_utils import split_into_chunks
