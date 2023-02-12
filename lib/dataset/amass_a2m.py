@@ -20,6 +20,7 @@
 
 import torch
 import joblib
+import roma
 import numpy as np
 from torch.utils.data import TensorDataset, DataLoader
 import tqdm
@@ -30,6 +31,8 @@ import os.path as osp
 from mdm.utils import rotation_conversions
 from lib.core.config import VIBE_DB_DIR
 from lib.data_utils.img_utils import split_into_chunks
+
+
 
 class AMASS(Dataset):
     def __init__(self, num_frames, split='train', restrict_subsets=None):
@@ -58,9 +61,19 @@ class AMASS(Dataset):
 
         print(f'AMASS dataset number of videos: {len(self.vid_indices)}')
 
-    def create_db_6d_upfront(self):
+    def create_db_6d_upfront(self, correct_frame_of_reference=True):
+        """
+        Convert the SMPL representation to the `pose_6d` representation. 
+        Joint idx 0 is root orientation in 6d, joint idx 1-24 are the relative joint 
+        orientations in 6d. Joint idx 25 has the root translation in its first 3 
+        idxs and 
 
-        print("   dataloader: doing 6d rotations")
+        `correct_frame_of_reference`=True is equivalent to switching the y-
+        and z- positions and negating the z values. This is implemented by a 90deg
+        rotation of the root joint (joint idx 0), and then flipping the 
+        """
+
+        print("   Dataloader: doing 6d rotations and shifting the reference frame")
         device='cuda'if torch.cuda.is_available() else 'cpu'
         
         thetas = torch.tensor(self.db['theta']).to(device)
@@ -70,7 +83,8 @@ class AMASS(Dataset):
         loader = DataLoader(dset, batch_size=2048*2, shuffle=False, drop_last=False)
         all_data = []
 
-        for (theta, trans) in tqdm.tqdm(loader):
+        
+        for theta, trans in tqdm.tqdm(loader):
             # like in amass dataset, concat a [1,0,0]: camera orientation (it will be)
             # removed, this is just for consistency
             cam = np.array([1., 0., 0.])[None, ...]
@@ -81,6 +95,16 @@ class AMASS(Dataset):
             ### now get the required pose vector
             pose = theta[...,3:75]     # (T,72)
             pose = pose.view(pose.shape[0], 24, 3) # (T,24,3)
+
+            ## if flagged, rotate the root orientation -90deg about x
+            if correct_frame_of_reference:
+                root = pose.clone()[:,[0],:]
+                root_rotated = apply_rotvec_to_aa2( 
+                    torch.Tensor(np.pi/2*np.array([-1,0,0])[None]).to(pose.device).double(),
+                    root.view(-1,3),
+                    ).view(root.shape)
+                pose[...,[0],:] = root_rotated
+
             ## convert it to 6d representation that we need for the model 
             pose_6d = rotation_conversions.matrix_to_rotation_6d(
                 rotation_conversions.axis_angle_to_matrix(
@@ -91,15 +115,26 @@ class AMASS(Dataset):
             trans[...,[0,2]] -=  trans[0,[0,2]].unsqueeze(0)  # center the x and z coords.
             trans = torch.cat((trans, torch.zeros((trans.shape[0], 3), device=trans.device)), -1) # (N,T,6)
             trans = trans.unsqueeze(1)  # (T,1,6)
-            
+
+            ## if flagged, the translation also needs to change
+            if correct_frame_of_reference:
+                trans_copy = trans.clone()
+                trans[...,1] = trans_copy[...,2].clone()
+                trans[...,2] = -trans_copy[...,1].clone()
+
             # append the translation to the joint angle
             data = torch.cat((pose_6d, trans), 1) # (T,25,6)
-            
             all_data.append(data.cpu().float())
         
         all_data = torch.cat(all_data)
+
         self.db['pose_6d'] = all_data
         return
+
+    def correct_amass_frame_of_reference(self, data):
+        """
+        Expects data in shape ()
+        """
 
     def create_subset(self, restrict_subsets):
         """  """
@@ -169,3 +204,8 @@ class AMASS(Dataset):
                 )
 
         return ret
+
+def apply_rotvec_to_aa2(rotvec, aa):
+    N = aa.shape[0]
+    rotvec = rotvec.repeat(N, 1)
+    return roma.rotvec_composition([rotvec, aa])
