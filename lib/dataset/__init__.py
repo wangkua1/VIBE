@@ -7,4 +7,5 @@ from .mpii3d import MPII3D
 from .threedpw import ThreeDPW
 from .posetrack import PoseTrack
 from .penn_action import PennAction
+from .h36m import H36M
 

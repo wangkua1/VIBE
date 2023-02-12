@@ -16,7 +16,7 @@
 
 import sys
 sys.path.append('.')
-
+import ipdb
 import os
 import cv2
 import torch
@@ -49,6 +49,7 @@ def read_data(folder, set, debug=False):
         'shape': [],
         'pose': [],
         'bbox': [],
+        'trans': [],
         'img_name': [],
         'features': [],
         'valid': [],
@@ -109,15 +110,7 @@ def read_data(folder, set, debug=False):
                 img_path = os.path.join(img_dir + '/image_{:05d}.jpg'.format(i_frame))
                 img_paths.append(img_path)
 
-            bbox_params, time_pt1, time_pt2 = get_smooth_bbox_params(j2d, vis_thresh=VIS_THRESH, sigma=8)
-
-            # process bbox_params
-            c_x = bbox_params[:,0]
-            c_y = bbox_params[:,1]
-            scale = bbox_params[:,2]
-            w = h = 150. / scale
-            w = h = h * 1.1
-            bbox = np.vstack([c_x,c_y,w,h]).T
+            bbox, time_pt1, time_pt2 = generate_bbox_from_j2d(j2d)
 
             # process keypoints
             j2d[:, :, 2] = j2d[:, :, 2] > 0.3  # set the visibility flags
@@ -145,7 +138,8 @@ def read_data(folder, set, debug=False):
             features = extract_features(model, img_paths_array, bbox,
                                         kp_2d=j2d[time_pt1:time_pt2], debug=debug, dataset='3dpw', scale=1.2)
             dataset['features'].append(features)
-
+            ipdb.set_trace()
+            
     for k in dataset.keys():
         dataset[k] = np.concatenate(dataset[k])
         print(k, dataset[k].shape)
@@ -159,8 +153,11 @@ def read_data(folder, set, debug=False):
 
 
 if __name__ == '__main__':
+    """
+    python -m VIBE.lib.data_utils.threedpw_utils
+    """
     parser = argparse.ArgumentParser()
-    parser.add_argument('--dir', type=str, help='dataset directory', default='data/3dpw')
+    parser.add_argument('--dir', type=str, help='dataset directory', default='VIBE/data/3dpw')
     args = parser.parse_args()
 
     debug = False
@@ -172,4 +169,4 @@ if __name__ == '__main__':
     # joblib.dump(dataset, osp.join(VIBE_DB_DIR, '3dpw_test_db.pt'))
 
     dataset = read_data(args.dir, 'train', debug=debug)
-    joblib.dump(dataset, osp.join(VIBE_DB_DIR, '3dpw_train_db.pt'))
+    # joblib.dump(dataset, osp.join(VIBE_DB_DIR, '3dpw_train_db.pt'))
