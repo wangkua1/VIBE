@@ -21,19 +21,21 @@ import logging
 import numpy as np
 import os.path as osp
 import joblib
-
+import ipdb
 from torch.utils.data import Dataset
 from lib.core.config import VIBE_DB_DIR
 from lib.data_utils.kp_utils import convert_kps
 from lib.data_utils.img_utils import normalize_2d_kp, transfrom_keypoints, split_into_chunks
+from VIBE.lib.models.smpl import SMPL_TO_J14
 
 logger = logging.getLogger(__name__)
 
 class Dataset3D(Dataset):
-    def __init__(self, set, seqlen, overlap=0., folder=None, dataset_name=None, debug=False):
+    def __init__(self, set, seqlen, overlap=0., folder=None, dataset_name=None, debug=False, set_format=None):
 
         self.folder = folder
         self.set = set
+        self.set_format = set if set_format is None else set_format
         self.dataset_name = dataset_name
         self.seqlen = seqlen
         self.stride = int(seqlen * (1-overlap))
@@ -61,18 +63,20 @@ class Dataset3D(Dataset):
     def get_single_item(self, index):
         start_index, end_index = self.vid_indices[index]
 
-        is_train = self.set == 'train'
+        is_train = self.set_format == 'train'
 
         if self.dataset_name == '3dpw':
             kp_2d = convert_kps(self.db['joints2D'][start_index:end_index + 1], src='common', dst='spin')
             kp_3d = self.db['joints3D'][start_index:end_index + 1]
+            if not is_train and kp_3d.shape[1] == 49: # me trying to validate on train set
+                kp_3d = kp_3d[:,  SMPL_TO_J14]
         elif self.dataset_name == 'mpii3d':
             kp_2d = self.db['joints2D'][start_index:end_index + 1]
             if is_train:
                 kp_3d = self.db['joints3D'][start_index:end_index + 1]
             else:
                 kp_3d = convert_kps(self.db['joints3D'][start_index:end_index + 1], src='spin', dst='common')
-        elif self.dataset_name == 'h36m':
+        elif self.dataset_name in ['h36m', 'h36m_db']:
             kp_2d = self.db['joints2D'][start_index:end_index + 1]
             if is_train:
                 kp_3d = self.db['joints3D'][start_index:end_index + 1]
@@ -90,17 +94,18 @@ class Dataset3D(Dataset):
             trans_ = self.db['trans'][start_index:end_index+1]
             w_smpl = torch.ones(self.seqlen).float()
             w_3d = torch.ones(self.seqlen).float()
-        elif self.dataset_name == 'h36m':
-            if not is_train:
-                pose = np.zeros((kp_2d.shape[0], 72))
-                shape = np.zeros((kp_2d.shape[0], 10))
-                w_smpl = torch.zeros(self.seqlen).float()
-                w_3d = torch.ones(self.seqlen).float()
-            else:
-                pose = self.db['pose'][start_index:end_index + 1]
-                shape = self.db['shape'][start_index:end_index + 1]
-                w_smpl = torch.ones(self.seqlen).float()
-                w_3d = torch.ones(self.seqlen).float()
+
+        elif self.dataset_name in ['h36m', 'h36m_db']:
+            # if not is_train:
+            #     pose = np.zeros((kp_2d.shape[0], 72))
+            #     shape = np.zeros((kp_2d.shape[0], 10))
+            #     w_smpl = torch.zeros(self.seqlen).float()
+            #     w_3d = torch.ones(self.seqlen).float()
+            # else:
+            pose = self.db['pose'][start_index:end_index + 1]
+            shape = self.db['shape'][start_index:end_index + 1]
+            w_smpl = torch.ones(self.seqlen).float()
+            w_3d = torch.ones(self.seqlen).float()
         elif self.dataset_name == 'mpii3d':
             pose = np.zeros((kp_2d.shape[0], 72))
             shape = np.zeros((kp_2d.shape[0], 10))

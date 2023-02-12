@@ -19,7 +19,7 @@ import torch
 import torchvision
 import numpy as np
 import matplotlib.pyplot as plt
-
+import ipdb
 from lib.utils.vis import batch_visualize_preds
 from lib.data_utils.img_utils import get_single_image_crop, convert_cvimg_to_tensor
 
@@ -76,6 +76,12 @@ def extract_features(model, video, bbox, debug=False, batch_size=200, kp_2d=None
         video = torch.cat(
             [get_single_image_crop(image, bbox, scale=scale).unsqueeze(0) for image, bbox in zip(video, bbox)], dim=0
         ).to(device)
+
+    # for i in range(0, 10):
+    #     frame = video[i].permute(1,2,0).cpu().numpy()
+    #     plt.imshow(frame)
+    #     plt.savefig(f'_tmp/h36m_{i:06d}.png')
+    # ipdb.set_trace()
 
     features = []
 
