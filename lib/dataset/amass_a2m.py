@@ -35,7 +35,7 @@ from lib.data_utils.img_utils import split_into_chunks
 
 
 class AMASS(Dataset):
-    def __init__(self, num_frames, split='train', restrict_subsets=None):
+    def __init__(self, num_frames, split='train', restrict_subsets=None, normalize_translation=True):
         """
         restrict_subsets: a list of strings of subsets to include in the final dataset
             If None then include all subdatasets. Valid subdataset names are:
@@ -44,7 +44,8 @@ class AMASS(Dataset):
         """
         self.dataname='amass'   # mdm training code uses this
         self.restrict_subsets=restrict_subsets
-        self.seqlen = num_frames
+        self.seqlen=num_frames
+        self.normalize_translation=normalize_translation
 
         self.stride = self.seqlen
 
@@ -59,6 +60,9 @@ class AMASS(Dataset):
         # transform the data to 6d
         self.create_db_6d_upfront()
 
+        # filter some video types - e.g. treadmill 
+        self.filter_videos()
+
         print(f'AMASS dataset number of videos: {len(self.vid_indices)}')
 
     def create_db_6d_upfront(self, correct_frame_of_reference=True):
@@ -69,7 +73,10 @@ class AMASS(Dataset):
         idxs and 
 
         `correct_frame_of_reference`=True is equivalent to switching the y-
-        and z- positions and negating the z values. This is implemented by a 90deg
+        and z- positions and negating the z values (required for getting in 
+        same frame as humanact12, 3dpw,) HumanML does this to amass data 
+        by doing the switch in xyz coords. Here we do it by rotating -90deg
+        about x-axis, switching the 
         rotation of the root joint (joint idx 0), and then flipping the 
         """
 
@@ -116,7 +123,7 @@ class AMASS(Dataset):
             trans = torch.cat((trans, torch.zeros((trans.shape[0], 3), device=trans.device)), -1) # (N,T,6)
             trans = trans.unsqueeze(1)  # (T,1,6)
 
-            ## if flagged, the translation also needs to change
+            ## if flagged, the translation also needs to change axes
             if correct_frame_of_reference:
                 trans_copy = trans.clone()
                 trans[...,1] = trans_copy[...,2].clone()
@@ -129,6 +136,25 @@ class AMASS(Dataset):
         all_data = torch.cat(all_data)
 
         self.db['pose_6d'] = all_data
+        return
+    
+    def filter_videos(self):
+        """
+        Filter videos based where vidnames have the strings 
+        from the list `FILTER_NAMES`
+         """
+        FILTER_NAMES = ['treadmill', 'normal_walk', 'TCD_handMocap']
+        start_idxs = np.array([s[0] for s in self.vid_indices])
+        vid_names = self.db['vid_name'][start_idxs]
+
+        mask_remove_vid = torch.zeros(len(vid_names))
+        for filter_name in FILTER_NAMES:
+            mask_remove_vid = mask_remove_vid + np.array(
+                [(filter_name in v) for v in vid_names]
+                )
+        idxs_keep_vid = np.where(~mask_remove_vid.bool())[0]
+        self.vid_indices = [self.vid_indices[i] for i in idxs_keep_vid]
+
         return
 
     def correct_amass_frame_of_reference(self, data):
@@ -160,47 +186,20 @@ class AMASS(Dataset):
         return db
 
     def get_single_item(self, index):
-        # import ipdb; ipdb.set_trace()
         start_index, end_index = self.vid_indices[index]
 
         data = self.db['pose_6d'][start_index:end_index+1]
         data = data.permute(1,2,0)              # (25,6,T)
-        # thetas = torch.tensor(self.db['theta'][start_index:end_index+1])
-        # trans = torch.tensor(self.db['trans'][start_index:end_index+1])
+        vid_name = self.db['vid_name'][start_index]
 
-        # # like in amass dataset, concat a [1,0,0]: camera orientation (it will be)
-        # # removed, this is just for consistency
-        # cam = np.array([1., 0., 0.])[None, ...]
-        # cam = np.repeat(cam, thetas.shape[0], axis=0)
-        # thetas = np.concatenate([cam, thetas], axis=-1)
-        # thetas = torch.tensor(thetas)
+        if self.normalize_translation:
+            data[-1,:,:] = data[-1,:,:] - data[-1,:,[0]]
 
-        # ### now get the required pose vector
-        # pose = thetas[...,3:75]     # (T,72)
-        # pose = pose.view(pose.shape[0], 24, 3) # (T,24,3)
-        # ## convert it to 6d representation that we need for the model 
-        # pose_6d = rotation_conversions.matrix_to_rotation_6d(
-        #     rotation_conversions.axis_angle_to_matrix(
-        #         pose
-        # )) # (T,24,6)
-
-        # # get translation and add dummy values to match the 6d rep
-        # trans[...,[0,2]] -=  trans[0,[0,2]].unsqueeze(0)  # center the x and z coords.
-        # trans = torch.cat((trans, torch.zeros((trans.shape[0], 3))), -1) # (N,T,6)
-        # trans = trans.unsqueeze(1)  # (T,1,6)
-        
-        # # append the translation to the joint angle
-        # data = torch.cat((pose_6d, trans), 1) # (T,25,6)
-        # data = data.permute(1,2,0)        # (25,6,T)
-        
-        # ## return value expected by mdm puts the motion data in `inp` key 
-        # # and then for a2m task we also need `action` and `action_text` which
-        # # we'll make as dummy vars. Then `collate_fn` in dataloader will turn 
-        # # that into the final outputs. 
         ret = dict(
                 inp=data.float(),
                 action=0,
                 action_text='',
+                vid_name=vid_name,
                 )
 
         return ret
