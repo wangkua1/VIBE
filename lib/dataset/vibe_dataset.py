@@ -55,7 +55,7 @@ class VibeDataset(Dataset):
 
         self.stride = self.seqlen
 
-        self.db = self.load_db()
+        self.db = self.load_db(split=split)
         # subsample 
         if self.SUBSAMPLE[self.dataset]!=1:
             ss = self.SUBSAMPLE[self.dataset]
@@ -191,15 +191,18 @@ class VibeDataset(Dataset):
     def __getitem__(self, index):
         return self.get_single_item(index)
 
-    def load_db(self):
-        valid_datasets = ['amass','h36m']
-        if self.dataset not in valid_datasets:
-            raise ValueEror(f"Invalid dataset [{self.dataset}]. Must be one of {valid_datasets}")
+    def load_db(self, split='train'):
+        # assert split in ['train','val']
 
         if self.dataset=='h36m':
+            # db_file = osp.join(VIBE_DB_DIR, f'h36m_db_{split}_db.pt')
             db_file = osp.join(VIBE_DB_DIR, f'h36m_db_train_db.pt')
+        elif self.dataset=='amass':
+            db_file = osp.join(VIBE_DB_DIR, f'amass_db.pt')
         else:
-            db_file = osp.join(VIBE_DB_DIR, f'{self.dataset}.pt')
+            valid_datasets = ['amass','h36m']
+            raise ValueEror(f"Invalid dataset [{self.dataset}]. Must be one of {valid_datasets}")
+
         db = joblib.load(db_file)
         return db
 
@@ -207,7 +210,6 @@ class VibeDataset(Dataset):
         start_index, end_index = self.vid_indices[index]
 
         data = self.db['pose_6d'][start_index:end_index+1]
-        features = self.db['features'][start_index:end_index+1]
         data = data.permute(1,2,0)              # (25,6,T)
         vid_name = self.db['vid_name'][start_index]
 
@@ -219,8 +221,9 @@ class VibeDataset(Dataset):
                 inp=data.float(),
                 action_text='',
                 vid_name=vid_name,
-                features=features,
                 )
+        if 'features' in self.db.keys():
+            ret['features'] = self.db['features'][start_index:end_index+1]
 
         return ret
 
