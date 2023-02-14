@@ -32,17 +32,23 @@ from mdm.utils import rotation_conversions
 from lib.core.config import VIBE_DB_DIR
 from lib.data_utils.img_utils import split_into_chunks
 
-
-
-class AMASS(Dataset):
-    def __init__(self, num_frames, split='train', restrict_subsets=None, normalize_translation=True):
+class VibeDataset(Dataset):
+    def __init__(self, num_frames, split='train', restrict_subsets=None, 
+        dataset='amass', normalize_translation=True):
         """
-        restrict_subsets: a list of strings of subsets to include in the final dataset
-            If None then include all subdatasets. Valid subdataset names are:
-            ['ACCAD', 'BioMotionLab', 'CMU', 'EKUT', 'Eyes', 'HumanEva', 'KIT',
-             'MPI', 'SFU', 'SSM', 'TCD', 'TotalCapture', 'Transitions'],
+        Args:
+            dataset (str): one of ('amass','h36m')
+            restrict_subsets: a list of strings of subsets to include in the final dataset
+                If None then include all subdatasets. Valid subdataset names are:
+                ['ACCAD', 'BioMotionLab', 'CMU', 'EKUT', 'Eyes', 'HumanEva', 'KIT',
+                 'MPI', 'SFU', 'SSM', 'TCD', 'TotalCapture', 'Transitions'],
         """
-        self.dataname='amass'   # mdm training code uses this
+        self.SUBSAMPLE = {
+            'amass' : 1,
+            'h36m' : 2,
+        }
+        self.dataset=dataset 
+        self.dataname=dataset   # mdm training code uses this
         self.restrict_subsets=restrict_subsets
         self.seqlen=num_frames
         self.normalize_translation=normalize_translation
@@ -50,6 +56,12 @@ class AMASS(Dataset):
         self.stride = self.seqlen
 
         self.db = self.load_db()
+        # subsample 
+        if self.SUBSAMPLE[self.dataset]!=1:
+            ss = self.SUBSAMPLE[self.dataset]
+            for k in data.dataset.db.keys():
+                data.dataset.db[k] = data.dataset.db[k][::ss]
+
         self.vid_indices = split_into_chunks(self.db['vid_name'], self.seqlen, self.stride)
         # del self.db['vid_name']
 
@@ -83,13 +95,12 @@ class AMASS(Dataset):
         print("   Dataloader: doing 6d rotations and shifting the reference frame")
         device='cuda'if torch.cuda.is_available() else 'cpu'
         
-        thetas = torch.tensor(self.db['theta']).to(device)
-        transes = torch.tensor(self.db['trans']).to(device)
+        thetas = torch.tensor(self.db['theta']).to(device).double()
+        transes = torch.tensor(self.db['trans']).to(device).double()
 
         dset = TensorDataset(thetas, transes)
         loader = DataLoader(dset, batch_size=2048*2, shuffle=False, drop_last=False)
         all_data = []
-
         
         for theta, trans in tqdm.tqdm(loader):
             # like in amass dataset, concat a [1,0,0]: camera orientation (it will be)
@@ -181,7 +192,14 @@ class AMASS(Dataset):
         return self.get_single_item(index)
 
     def load_db(self):
-        db_file = osp.join(VIBE_DB_DIR, 'amass_db.pt')
+        valid_datasets = ['amass','h36m']
+        if self.dataset not in valid_datasets:
+            raise ValueEror(f"Invalid dataset [{self.dataset}]. Must be one of {valid_datasets}")
+
+        if self.dataset=='h36m':
+            db_file = osp.join(VIBE_DB_DIR, f'h36m_db_train_db.pt')
+        else:
+            db_file = osp.join(VIBE_DB_DIR, f'{self.dataset}.pt')
         db = joblib.load(db_file)
         return db
 
@@ -189,17 +207,20 @@ class AMASS(Dataset):
         start_index, end_index = self.vid_indices[index]
 
         data = self.db['pose_6d'][start_index:end_index+1]
+        features = self.db['features'][start_index:end_index+1]
         data = data.permute(1,2,0)              # (25,6,T)
         vid_name = self.db['vid_name'][start_index]
 
         if self.normalize_translation:
-            data[-1,:,:] = data[-1,:,:] - data[-1,:,[0]]
+            # has format (J,6,T). translation is the last joint (dim 0)
+            data[-1,:,:] = data[-1,:,:] - data[-1,:,[0]] 
 
         ret = dict(
                 inp=data.float(),
                 action=0,
                 action_text='',
                 vid_name=vid_name,
+                features=features,
                 )
 
         return ret
