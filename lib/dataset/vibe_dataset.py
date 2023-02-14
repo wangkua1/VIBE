@@ -59,8 +59,8 @@ class VibeDataset(Dataset):
         # subsample 
         if self.SUBSAMPLE[self.dataset]!=1:
             ss = self.SUBSAMPLE[self.dataset]
-            for k in data.dataset.db.keys():
-                data.dataset.db[k] = data.dataset.db[k][::ss]
+            for k in self.db.keys():
+                self.db[k] = self.db[k][::ss]
 
         self.vid_indices = split_into_chunks(self.db['vid_name'], self.seqlen, self.stride)
         # del self.db['vid_name']
@@ -217,7 +217,6 @@ class VibeDataset(Dataset):
 
         ret = dict(
                 inp=data.float(),
-                action=0,
                 action_text='',
                 vid_name=vid_name,
                 features=features,
