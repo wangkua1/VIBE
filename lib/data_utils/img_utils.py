@@ -326,7 +326,8 @@ def split_into_chunks(vid_names, seqlen, stride):
     perm = np.argsort(group)
     video_names, group = video_names[perm], group[perm]
 
-    indices = np.split(np.arange(0, vid_names.shape[0]), group[1:])
+    indices = np.split(np.arange(0, len(vid_names)), group[1:])
+    # indices = np.split(np.arange(0, vid_names.shape[0]), group[1:])
 
     for idx in range(len(video_names)):
         indexes = indices[idx]
