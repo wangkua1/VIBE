@@ -24,7 +24,7 @@ import roma
 import numpy as np
 from torch.utils.data import TensorDataset, DataLoader
 import tqdm
-
+from collections import defaultdict
 from torch.utils.data import Dataset
 
 import os.path as osp
@@ -49,20 +49,16 @@ class VibeDataset(Dataset):
         }
         self.dataset=dataset 
         self.dataname=dataset   # mdm training code uses this
+        self.split=split
         self.restrict_subsets=restrict_subsets
         self.seqlen=num_frames
         self.normalize_translation=normalize_translation
 
         self.stride = self.seqlen
 
-        self.db = self.load_db(split=split)
-        # subsample 
-        if self.SUBSAMPLE[self.dataset]!=1:
-            ss = self.SUBSAMPLE[self.dataset]
-            for k in self.db.keys():
-                self.db[k] = self.db[k][::ss]
+        self.db = self.load_db(split=split, subsample=self.SUBSAMPLE[self.dataset])
 
-        self.vid_indices = split_into_chunks(self.db['vid_name'], self.seqlen, self.stride)
+        self.vid_indices = split_into_chunks(np.array(self.db['vid_name']), self.seqlen, self.stride)
         # del self.db['vid_name']
 
         if not restrict_subsets is None:
@@ -73,7 +69,8 @@ class VibeDataset(Dataset):
         self.create_db_6d_upfront()
 
         # filter some video types - e.g. treadmill 
-        self.filter_videos()
+        if self.dataset=='amass':
+            self.filter_videos()
 
         print(f'AMASS dataset number of videos: {len(self.vid_indices)}')
 
@@ -91,12 +88,12 @@ class VibeDataset(Dataset):
         about x-axis, switching the 
         rotation of the root joint (joint idx 0), and then flipping the 
         """
-
         print("   Dataloader: doing 6d rotations and shifting the reference frame")
         device='cuda'if torch.cuda.is_available() else 'cpu'
         
-        thetas = torch.tensor(self.db['theta']).to(device).double()
-        transes = torch.tensor(self.db['trans']).to(device).double()
+        pose_key = 'theta' if self.dataset=='amass' else 'pose'
+        thetas = torch.tensor(self.db[pose_key]).to(device).float()
+        transes = torch.tensor(self.db['trans']).to(device).float()
 
         dset = TensorDataset(thetas, transes)
         loader = DataLoader(dset, batch_size=2048*2, shuffle=False, drop_last=False)
@@ -118,7 +115,7 @@ class VibeDataset(Dataset):
             if correct_frame_of_reference:
                 root = pose.clone()[:,[0],:]
                 root_rotated = apply_rotvec_to_aa2( 
-                    torch.Tensor(np.pi/2*np.array([-1,0,0])[None]).to(pose.device).double(),
+                    torch.Tensor(np.pi/2*np.array([-1,0,0])[None]).to(pose.device).float(),
                     root.view(-1,3),
                     ).view(root.shape)
                 pose[...,[0],:] = root_rotated
@@ -156,7 +153,7 @@ class VibeDataset(Dataset):
          """
         FILTER_NAMES = ['treadmill', 'normal_walk', 'TCD_handMocap']
         start_idxs = np.array([s[0] for s in self.vid_indices])
-        vid_names = self.db['vid_name'][start_idxs]
+        vid_names = np.array([self.db['vid_name'][i] for i in start_idxs])
 
         mask_remove_vid = torch.zeros(len(vid_names))
         for filter_name in FILTER_NAMES:
@@ -191,19 +188,52 @@ class VibeDataset(Dataset):
     def __getitem__(self, index):
         return self.get_single_item(index)
 
-    def load_db(self, split='train'):
-        # assert split in ['train','val']
+    def load_db(self, split='train', subsample=1):
+        if self.dataset=='amass':
+            return self.load_db_amass(subsample)
 
-        if self.dataset=='h36m':
-            # db_file = osp.join(VIBE_DB_DIR, f'h36m_db_{split}_db.pt')
-            db_file = osp.join(VIBE_DB_DIR, f'h36m_db_train_db.pt')
-        elif self.dataset=='amass':
-            db_file = osp.join(VIBE_DB_DIR, f'amass_db.pt')
+        elif self.dataset=='h36m':
+            return self.load_db_h36m(subsample)
+        
         else:
             valid_datasets = ['amass','h36m']
             raise ValueEror(f"Invalid dataset [{self.dataset}]. Must be one of {valid_datasets}")
 
+    def load_db_amass(self, subsample):
+        db_file = osp.join(VIBE_DB_DIR, f'amass_db.pt')
         db = joblib.load(db_file)
+        db = self.subsample(db, subsample)
+
+    def load_db_h36m(self, subsample):
+        if self.split == 'train':
+            user_list = [1, 5, 6, 7, 8]
+        elif self.split in ['val','test']: # JB added test for compatibility with mdm.sample.generate
+            user_list = [9, 11]
+
+        seq_db_list = []
+        for user_i in user_list:
+            print(f"  Loading Subject S{user_i}" )
+            db_subset = joblib.load(osp.join(VIBE_DB_DIR, f'h36m_{user_i}_db.pt'))
+            seq_db_list.append(db_subset)
+
+        dataset = defaultdict(list)
+        for seq_db in seq_db_list:
+            for k, v in seq_db.items():
+                dataset[k] += list(v)
+
+        dataset = self.subsample(dataset, subsample)
+        
+        # convert to array
+        for k in dataset.keys():
+
+            dataset[k] = np.array(dataset[k])
+
+        print(f'Loaded h36m split [{self.split}]')
+        return dataset
+
+    def subsample(self, db, subsample=1):
+        for k in db.keys():
+            db[k] = db[k][::subsample]
         return db
 
     def get_single_item(self, index):
