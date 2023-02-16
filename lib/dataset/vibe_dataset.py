@@ -34,7 +34,7 @@ from lib.data_utils.img_utils import split_into_chunks
 
 class VibeDataset(Dataset):
     def __init__(self, num_frames, split='train', restrict_subsets=None, 
-        dataset='amass', normalize_translation=True):
+        dataset='amass', normalize_translation=True, correct_frame_of_reference=False):
         """
         Args:
             dataset (str): one of ('amass','h36m')
@@ -42,10 +42,13 @@ class VibeDataset(Dataset):
                 If None then include all subdatasets. Valid subdataset names are:
                 ['ACCAD', 'BioMotionLab', 'CMU', 'EKUT', 'Eyes', 'HumanEva', 'KIT',
                  'MPI', 'SFU', 'SSM', 'TCD', 'TotalCapture', 'Transitions'],
+            correct_frame_of_reference: whether to switch x- and z- axis, which is needed sometimes
+                If None, then it 
         """
         self.SUBSAMPLE = {
             'amass' : 1,
             'h36m' : 2,
+            '3dpw' : 1,
         }
         self.dataset=dataset 
         self.dataname=dataset   # mdm training code uses this
@@ -66,43 +69,46 @@ class VibeDataset(Dataset):
             self.create_subset(restrict_subsets)
 
         # transform the data to 6d
-        self.create_db_6d_upfront()
+        self.correct_frame_of_reference = True if self.dataset in ('amass','h36m','3dpw') else False
+        self.correct_frame_of_reference = correct_frame_of_reference
+        self.create_db_6d_upfront(self.correct_frame_of_reference)
 
         # filter some video types - e.g. treadmill 
         if self.dataset=='amass':
             self.filter_videos()
 
-        print(f'AMASS dataset number of videos: {len(self.vid_indices)}')
+        print(f'  number of videos: {len(self.vid_indices)}')
 
-    def create_db_6d_upfront(self, correct_frame_of_reference=True):
+    def create_db_6d_upfront(self, correct_frame_of_reference=False):
         """
         Convert the SMPL representation to the `pose_6d` representation. 
         Joint idx 0 is root orientation in 6d, joint idx 1-24 are the relative joint 
         orientations in 6d. Joint idx 25 has the root translation in its first 3 
         idxs and 
 
-        `correct_frame_of_reference`=True is equivalent to switching the y-
-        and z- positions and negating the z values (required for getting in 
-        same frame as humanact12, 3dpw,) HumanML does this to amass data 
+        `correct_frame_of_reference`=True should be used for Amass. It is equivalent 
+        to switching the y- and z- positions and negating the z values (required for 
+        getting amass in same frame as humanact12, 3dpw,) HumanML does this to amass data 
         by doing the switch in xyz coords. Here we do it by rotating -90deg
-        about x-axis, switching the 
-        rotation of the root joint (joint idx 0), and then flipping the 
+        about x-axis, switching the  rotation of the root joint (joint idx 0),
+         and then flipping the.
         """
-        print("   Dataloader: doing 6d rotations and shifting the reference frame")
+        print("   Dataloader: doing 6d rotations")
         device='cuda'if torch.cuda.is_available() else 'cpu'
         
         pose_key = 'theta' if self.dataset=='amass' else 'pose'
-        thetas = torch.tensor(self.db[pose_key]).to(device).float()
+        thetas = torch.tensor(self.db[pose_key]).to(device).float() # pose and beta
         transes = torch.tensor(self.db['trans']).to(device).float()
 
         dset = TensorDataset(thetas, transes)
         loader = DataLoader(dset, batch_size=2048*2, shuffle=False, drop_last=False)
         all_data = []
         
+        import ipdb; ipdb.set_trace
         for theta, trans in tqdm.tqdm(loader):
             # like in amass dataset, concat a [1,0,0]: camera orientation (it will be)
             # removed, this is just for consistency
-            cam = np.array([1., 0., 0.])[None, ...]
+            cam = np.array([1., 0., 0.], dtype=np.float32)[None, ...]
             cam = torch.Tensor(np.repeat(cam, theta.shape[0], axis=0)).to(device)
             theta = torch.cat([cam, theta], -1).to(device)
             # theta = torch.tensor(theta).to(device)
@@ -189,25 +195,32 @@ class VibeDataset(Dataset):
         return self.get_single_item(index)
 
     def load_db(self, split='train', subsample=1):
+        """ 
+        Note that subsampling is implemented in each `load_db_{dataset}` call
+        because the 3dpw uses it at a specific point to prevent RAM issues.
+        """
         if self.dataset=='amass':
-            return self.load_db_amass(subsample)
-
+            db = self.load_db_amass(split)
+            db = self.subsample(db)
         elif self.dataset=='h36m':
-            return self.load_db_h36m(subsample)
-        
+            db = self.load_db_h36m(split, subsample=subsample)
+        elif self.dataset=='3dpw':
+            db = self.load_db_3dpw(split)
         else:
-            valid_datasets = ['amass','h36m']
+            valid_datasets = ['amass','h36m','3dpw']
             raise ValueEror(f"Invalid dataset [{self.dataset}]. Must be one of {valid_datasets}")
+        
+        return db 
 
-    def load_db_amass(self, subsample):
+    def load_db_amass(self, split):
         db_file = osp.join(VIBE_DB_DIR, f'amass_db.pt')
         db = joblib.load(db_file)
-        db = self.subsample(db, subsample)
+        return db
 
-    def load_db_h36m(self, subsample):
-        if self.split == 'train':
+    def load_db_h36m(self, split, subsample=2):
+        if split == 'train':
             user_list = [1, 5, 6, 7, 8]
-        elif self.split in ['val','test']: # JB added test for compatibility with mdm.sample.generate
+        elif split in ['val','test']: # JB added test for compatibility with mdm.sample.generate
             user_list = [9, 11]
 
         seq_db_list = []
@@ -217,19 +230,24 @@ class VibeDataset(Dataset):
             seq_db_list.append(db_subset)
 
         dataset = defaultdict(list)
+
         for seq_db in seq_db_list:
             for k, v in seq_db.items():
                 dataset[k] += list(v)
-
-        dataset = self.subsample(dataset, subsample)
         
+        dataset = self.subsample(dataset, subsample)
+
         # convert to array
-        for k in dataset.keys():
+        # for k in dataset.keys():
+        #     dataset[k] = np.array(dataset[k])
 
-            dataset[k] = np.array(dataset[k])
-
-        print(f'Loaded h36m split [{self.split}]')
+        print(f'Loaded h36m split [{split}]')
         return dataset
+
+    def load_db_3dpw(self, split):
+        db_file = osp.join(VIBE_DB_DIR, f'3dpw_{split}_db.pt')
+        db = joblib.load(db_file)
+        return db
 
     def subsample(self, db, subsample=1):
         for k in db.keys():
