@@ -33,8 +33,9 @@ from lib.core.config import VIBE_DB_DIR
 from lib.data_utils.img_utils import split_into_chunks
 
 class VibeDataset(Dataset):
-    def __init__(self, num_frames, split='train', restrict_subsets=None, 
-        dataset='amass', normalize_translation=True, correct_frame_of_reference=False):
+    def __init__(self, num_frames, dataset='amass', split='train', restrict_subsets=None, 
+        data_rep='rot6d', foot_vel_threshold=0.01, normalize_translation=True, 
+        correct_frame_of_reference=False):
         """
         Args:
             dataset (str): one of ('amass','h36m')
@@ -42,20 +43,28 @@ class VibeDataset(Dataset):
                 If None then include all subdatasets. Valid subdataset names are:
                 ['ACCAD', 'BioMotionLab', 'CMU', 'EKUT', 'Eyes', 'HumanEva', 'KIT',
                  'MPI', 'SFU', 'SSM', 'TCD', 'TotalCapture', 'Transitions'],
-            correct_frame_of_reference: whether to switch x- and z- axis, which is needed sometimes
+            correct_frame_of_reference: (depracated) whether to switch y- and z- axis, which is needed sometimes
                 If None, then it 
+            data_rep (str): one of ('rot6d', 'rot6d_p_fc')
         """
         self.SUBSAMPLE = {
             'amass' : 1,
             'h36m' : 2,
             '3dpw' : 1,
         }
+        self.ROTATE_ABOUT_X = {
+            'amass' : True,
+            'h36m' : False,
+            '3dpw' : False,
+        }
         self.dataset=dataset 
         self.dataname=dataset   # mdm training code uses this
         self.split=split
+        self.data_rep=data_rep
         self.restrict_subsets=restrict_subsets
         self.seqlen=num_frames
         self.normalize_translation=normalize_translation
+        self.foot_vel_threshold=foot_vel_threshold # for foot contact mask if it's used
 
         self.stride = self.seqlen
 
@@ -68,25 +77,29 @@ class VibeDataset(Dataset):
             # if True, this overwrites the `vid_indices` object with a restricted version
             self.create_subset(restrict_subsets)
 
-        # transform the data to 6d
-        self.correct_frame_of_reference = True if self.dataset in ('amass','h36m','3dpw') else False
-        self.correct_frame_of_reference = correct_frame_of_reference
-        self.create_db_6d_upfront(self.correct_frame_of_reference)
+        # Set flags for some data tarnsforms. 1st, for somek datasets, the axes need
+        # to be changed. 2nd, we may want to compute 
+        if correct_frame_of_reference: 
+            raise ValueError("arg `correct_frame_of_reference` no longer does anything")
+        self.do_rotate_about_x = self.ROTATE_ABOUT_X[self.dataset]
+        self.do_fc_mask = True if self.data_rep in ('rot6d_p_fc') else False
+        # compute the 6d articulations upfront, which is affected by the flags set above
+        self.create_db_6d_upfront(do_rotate_about_x=self.do_rotate_about_x, do_fc_mask=self.do_fc_mask)
 
-        # filter some video types - e.g. treadmill 
+        # filter some video types - e.g. treadmill, handmocap
         if self.dataset=='amass':
             self.filter_videos()
 
         print(f'  number of videos: {len(self.vid_indices)}')
 
-    def create_db_6d_upfront(self, correct_frame_of_reference=False):
+    def create_db_6d_upfront(self, do_rotate_about_x=False, do_fc_mask=False):
         """
         Convert the SMPL representation to the `pose_6d` representation. 
         Joint idx 0 is root orientation in 6d, joint idx 1-24 are the relative joint 
         orientations in 6d. Joint idx 25 has the root translation in its first 3 
         idxs and 
 
-        `correct_frame_of_reference`=True should be used for Amass. It is equivalent 
+        `do_rotate_about_x`=True should be used for Amass. It is equivalent 
         to switching the y- and z- positions and negating the z values (required for 
         getting amass in same frame as humanact12, 3dpw,) HumanML does this to amass data 
         by doing the switch in xyz coords. Here we do it by rotating -90deg
@@ -103,6 +116,7 @@ class VibeDataset(Dataset):
         dset = TensorDataset(thetas, transes)
         loader = DataLoader(dset, batch_size=2048*2, shuffle=False, drop_last=False)
         all_data = []
+        fc_mask = []
         
         import ipdb; ipdb.set_trace
         for theta, trans in tqdm.tqdm(loader):
@@ -118,7 +132,7 @@ class VibeDataset(Dataset):
             pose = pose.view(pose.shape[0], 24, 3) # (T,24,3)
 
             ## if flagged, rotate the root orientation -90deg about x
-            if correct_frame_of_reference:
+            if do_rotate_about_x:
                 root = pose.clone()[:,[0],:]
                 root_rotated = apply_rotvec_to_aa2( 
                     torch.Tensor(np.pi/2*np.array([-1,0,0])[None]).to(pose.device).float(),
@@ -138,7 +152,7 @@ class VibeDataset(Dataset):
             trans = trans.unsqueeze(1)  # (T,1,6)
 
             ## if flagged, the translation also needs to change axes
-            if correct_frame_of_reference:
+            if do_rotate_about_x:
                 trans_copy = trans.clone()
                 trans[...,1] = trans_copy[...,2].clone()
                 trans[...,2] = -trans_copy[...,1].clone()
@@ -146,10 +160,26 @@ class VibeDataset(Dataset):
             # append the translation to the joint angle
             data = torch.cat((pose_6d, trans), 1) # (T,25,6)
             all_data.append(data.cpu().float())
-        
-        all_data = torch.cat(all_data)
 
-        self.db['pose_6d'] = all_data
+            # if flagged, compute the foot contact mask
+            if do_fc_mask:
+                
+                # self.foot_vel_threshold
+
+                # fc_mask.append()
+                pass
+        
+        self.db['pose_6d'] = torch.cat(all_data)
+        # if do_fc_mask:
+        #     self.db['fc_mask'] = torch.cat(fc_mask)
+        return
+
+    def compute_fc_mask(self):
+        assert hasattr(self,db) and hasattr(self.db, 'pose_6d'), "must run `create_db_6d_upfront` first"
+
+
+
+        self.db['fc_mask'] = None
         return
     
     def filter_videos(self):
