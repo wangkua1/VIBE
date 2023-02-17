@@ -225,7 +225,10 @@ class VibeDataset(Dataset):
         return db 
 
     def load_db_amass(self, split):
-        db_file = osp.join(VIBE_DB_DIR, f'amass_db.pt')
+        if split == 'db':
+            db_file = osp.join(VIBE_DB_DIR, f'amass_db_db.pt')
+        else:
+            db_file = osp.join(VIBE_DB_DIR, f'amass_db.pt')
         db = joblib.load(db_file)
         return db
 
