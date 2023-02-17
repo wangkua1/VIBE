@@ -26,6 +26,7 @@ from torch.utils.data import TensorDataset, DataLoader
 import tqdm
 from collections import defaultdict
 from torch.utils.data import Dataset
+from mdm.model.rotation2xyz import Rotation2xyz
 
 import os.path as osp
 from mdm.utils import rotation_conversions
@@ -48,6 +49,7 @@ class VibeDataset(Dataset):
                 If None, then it 
             data_rep (str): one of ('rot6d', 'rot6d_p_fc')
         """
+        self.device='cuda'if torch.cuda.is_available() else 'cpu'
         self.SUBSAMPLE = {
             'amass' : 1,
             'h36m' : 2,
@@ -58,6 +60,11 @@ class VibeDataset(Dataset):
             'h36m' : False,
             '3dpw' : False,
         }
+        # self.FOOT_VEL_THRESHOLD = {
+        #     'amass' : 0.03,
+        #     'h36m' : 0.03,
+        #     '3dpw' : 0.03,
+        # }
         self.dataset=dataset 
         self.dataname=dataset   # mdm training code uses this
         self.split=split
@@ -80,18 +87,26 @@ class VibeDataset(Dataset):
             # if True, this overwrites the `vid_indices` object with a restricted version
             self.create_subset(restrict_subsets)
 
-        # Set flags for some data tarnsforms. 1st, for somek datasets, the axes need
-        # to be changed. 2nd, we may want to compute 
+        # Precompute the 6d articulation. Set a flags for axes to be changed.
         if correct_frame_of_reference: 
+            # self.do_rotate_about_x=correct_frame_of_reference
             raise ValueError("arg `correct_frame_of_reference` no longer does anything")
         self.do_rotate_about_x = self.ROTATE_ABOUT_X[self.dataset]
-        self.do_fc_mask = True if self.data_rep in ('rot6d_p_fc') else False
-        # compute the 6d articulations upfront, which is affected by the flags set above
-        self.create_db_6d_upfront(do_rotate_about_x=self.do_rotate_about_x, do_fc_mask=self.do_fc_mask)
-
+        self.create_db_6d_upfront(do_rotate_about_x=self.do_rotate_about_x)
+        # for data_rep with foot contact, prepare it 
+        if self.data_rep in ('rot6d_fc'):
+            self.do_fc_mask = True 
+            # self.compute_fc_mask(self.FOOT_VEL_THRESHOLD[self.dataset])
+            self.compute_fc_mask(foot_vel_threshold)
+        else:
+            self.do_fc_mask = False
+        
         # filter some video types - e.g. treadmill, handmocap
         if self.dataset=='amass':
             self.filter_videos()
+
+        # dataset feature parameters
+        self.njoints, self.nfeats = self.__getitem__(0)['inp'].shape[:2]
 
         print(f'  number of videos: {len(self.vid_indices)}')
 
@@ -109,13 +124,10 @@ class VibeDataset(Dataset):
         about x-axis, switching the  rotation of the root joint (joint idx 0),
          and then flipping the.
         """
-
         print("   Dataloader: doing 6d rotations")
-        device='cuda'if torch.cuda.is_available() else 'cpu'
-        
         pose_key = 'theta' if self.dataset=='amass' else 'pose'
-        thetas = torch.tensor(self.db[pose_key]).to(device).float() # pose and beta
-        transes = torch.tensor(self.db['trans']).to(device).float()
+        thetas = torch.tensor(self.db[pose_key]).to(self.device).float() # pose and beta
+        transes = torch.tensor(self.db['trans']).to(self.device).float()
 
         dset = TensorDataset(thetas, transes)
         loader = DataLoader(dset,
@@ -123,15 +135,14 @@ class VibeDataset(Dataset):
                             shuffle=False,
                             drop_last=False)
         all_data = []
-        fc_mask = []
+        all_foot_vels = []
         
         for theta, trans in tqdm.tqdm(loader):
             # like in amass dataset, concat a [1,0,0]: camera orientation (it will be)
             # removed, this is just for consistency
             cam = np.array([1., 0., 0.], dtype=np.float32)[None, ...]
-            cam = torch.Tensor(np.repeat(cam, theta.shape[0], axis=0)).to(device)
-            theta = torch.cat([cam, theta], -1).to(device)
-            # theta = torch.tensor(theta).to(device)
+            cam = torch.Tensor(np.repeat(cam, theta.shape[0], axis=0)).to(self.device)
+            theta = torch.cat([cam, theta], -1).to(self.device)
 
             ### now get the required pose vector
             pose = theta[..., 3:75]  # (T,72)
@@ -169,23 +180,63 @@ class VibeDataset(Dataset):
             data = torch.cat((pose_6d, trans), 1)  # (T,25,6)
             all_data.append(data.cpu().float())
 
-            # if flagged, compute the foot contact mask
-            if do_fc_mask:
-                
-                # self.foot_vel_threshold
+        self.db['pose_6d'] = torch.cat(all_data)   
 
-                # fc_mask.append()
-                pass
+
+    def compute_fc_mask(self, foot_vel_threshold=0.03):
         
-        self.db['pose_6d'] = torch.cat(all_data)
-        # if do_fc_mask:
-        #     self.db['fc_mask'] = torch.cat(fc_mask)
-        return
+        assert hasattr(self,'db') and ('pose_6d' in self.db.keys()), "must run `create_db_6d_upfront` first"
 
-    def compute_fc_mask(self):
-        assert hasattr(self,db) and hasattr(self.db, 'pose_6d'), "must run `create_db_6d_upfront` first"
+        # this rot6d->xyz conversion code from the original 
+        self.rot2xyz = Rotation2xyz(device=self.device, dataset=self.dataset)
+        self.get_xyz = lambda sample: self.rot2xyz(
+                        sample, mask=None, pose_rep="rot6d", translation=True,
+                        glob=True, jointstype='smpl', vertstrans=False)
+        
+        self.foot_vel_threshold=foot_vel_threshold
+        # create an array for putting foot velocities 
+        T, J, D = self.db['pose_6d'].shape
+        assert J==25 and D==6
+        foot_vel = torch.zeros((T,4), dtype=torch.float32, device='cpu')
+        # iterate over batches of vid indices
+        batch_size = 128
+        loader = DataLoader(TensorDataset(torch.tensor(self.vid_indices)),
+                            batch_size=batch_size,
+                            shuffle=False,
+                            drop_last=False)
+        
+        print("  Dataloader: getting foot contact data")
+        for batch_idx, (idxs,) in enumerate(tqdm.tqdm(loader)):
+            # get the frames in a continuous sequnce
+            start_idx, end_idx = idxs[:,0], idxs[:,1]
+            slcs = [slice(start_idx[i].item(), end_idx[i].item()+1) for i in range(len(start_idx))]
+            target = torch.stack([self.db['pose_6d'][s] for s in slcs]) # (N,T,25,6)
+            
+            # check that each video sequence is from the same video
+            vid_names = np.stack([self.db['vid_name'][s] for s in slcs])
+            assert np.all(np.all(np.char.equal(vid_names[:, 1:], vid_names[:, :-1]), axis=1)),\
+                "Error: indexed frames in a sequence not from the same video "
 
-        self.db['fc_mask'] = None
+            # do forward kinematics to get positions
+            with torch.no_grad():
+                target_xyz = self.get_xyz(target.to(self.device).permute(0,2,3,1))
+            # get the foot and ankle joint positions and velocities
+            l_ankle_idx, r_ankle_idx, l_foot_idx, r_foot_idx = 7, 8, 10, 11
+            relevant_joints = [l_ankle_idx, l_foot_idx, r_ankle_idx, r_foot_idx]
+            gt_joint_xyz = target_xyz[:,relevant_joints,:,:]  # [BatchSize, 4, 3, Frames]
+            gt_joint_vel = torch.linalg.norm(gt_joint_xyz[:,:,:,1:] - gt_joint_xyz[:,:,:,:-1], axis=2)  # [BatchSize, 4, Frames]
+            # velocity has shape (N,4,T-1) ... make it (N,4,T) by assuming the last value is the same 
+            gt_joint_vel = torch.cat((
+                gt_joint_vel,
+                gt_joint_vel[...,[-1]]
+                ), -1).permute(0,2,1).cpu() # (N,T,4)
+
+            # Put these results back in the frame 
+            for i, slc in enumerate(slcs):
+                foot_vel[slcs[i]] = gt_joint_vel[i]
+
+        self.db['foot_vel'] = foot_vel
+        self.db['fc_mask'] = (foot_vel<=foot_vel_threshold)
         return
 
     def filter_videos(self):
@@ -205,11 +256,6 @@ class VibeDataset(Dataset):
         self.vid_indices = [self.vid_indices[i] for i in idxs_keep_vid]
 
         return
-
-    def correct_amass_frame_of_reference(self, data):
-        """
-        Expects data in shape ()
-        """
 
     def create_subset(self, restrict_subsets):
         """  """
@@ -305,7 +351,9 @@ class VibeDataset(Dataset):
     def get_single_item(self, index):
         start_index, end_index = self.vid_indices[index]
 
-        data = self.db['pose_6d'][start_index:end_index + 1]
+        data = self.db['pose_6d'][start_index:end_index + 1] 
+        T,J,D = data.shape
+        assert J==25 and D==6
         data = data.permute(1, 2, 0)  # (25,6,T)
         vid_name = self.db['vid_name'][start_index]
 
@@ -313,11 +361,20 @@ class VibeDataset(Dataset):
             # has format (J,6,T). translation is the last joint (dim 0)
             data[-1, :, :] = data[-1, :, :] - data[-1, :, [0]]
 
+        if self.data_rep=="rot6d_fc":
+            fc_mask = self.db['fc_mask'][start_index:end_index + 1] # (T,4)
+            data = data.permute(2,0,1) # (T,25,6)
+            data = torch.cat((
+                data.view(T,J*D),
+                fc_mask
+                ), 1).unsqueeze(2).permute(1,2,0) # (154,1,T)
+
         ret = dict(
             inp=data.float(),
             action_text='',
             vid_name=vid_name,
         )
+
         if 'features' in self.db.keys():
             ret['features'] = self.db['features'][start_index:end_index + 1]
 
