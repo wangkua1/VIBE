@@ -88,7 +88,102 @@ def apply_rotvec_to_aa2(rotvec, aa):
     return roma.rotvec_composition([aa, rotvec])
 
 
-def process_sequence(user_i, seq_i, get_img_feature=True):
+def rotvec_to_points(rotvec, points):
+    pass
+
+
+def find_best_fitting_plane_normal(points):
+    # Compute the centroid of the points
+    centroid = np.mean(points, axis=0)
+
+    # Subtract the centroid from the points
+    centered_points = points - centroid
+
+    # Compute the covariance matrix of the centered points
+    covariance_matrix = np.cov(centered_points, rowvar=False)
+
+    # Compute the eigenvectors and eigenvalues of the covariance matrix
+    eigenvalues, eigenvectors = np.linalg.eigh(covariance_matrix)
+
+    # The eigenvector with the smallest eigenvalue is the unit normal vector to the plane
+    normal_vector = eigenvectors[:, 0]
+
+    # Ensure that the normal vector points away the origin
+    if np.dot(normal_vector, centroid) < 0:
+        normal_vector = -normal_vector
+
+    return normal_vector
+
+
+def find_rotation(input_vector, target_vector=[0, 1, 0]):
+    # Find the rotation axis
+    axis = np.cross(input_vector, target_vector)
+    axis /= np.linalg.norm(axis)
+
+    # Find the angle of rotation
+    angle = np.arccos(
+        np.dot(input_vector, target_vector) /
+        (np.linalg.norm(input_vector) * np.linalg.norm(target_vector)))
+
+    # Compute the rotation matrix using Rodrigues' rotation formula
+    skew_symmetric = np.array([[0, -axis[2], axis[1]], [axis[2], 0, -axis[0]],
+                               [-axis[1], axis[0], 0]])
+    rotation_matrix = np.eye(3) + np.sin(angle) * skew_symmetric + (
+        1 - np.cos(angle)) * np.dot(skew_symmetric, skew_symmetric)
+
+    # Verify that the rotation matrix aligns the normal vector with the target vector
+    rotated_normal = np.dot(rotation_matrix, input_vector)
+    assert np.allclose(rotated_normal / np.linalg.norm(rotated_normal),
+                       target_vector)
+    return rotation_matrix
+
+
+def apply_rot_to_batch(batch, rot):
+    """
+    Input
+        batch -- Tensor of (N, 25, 3, T), or (N, 25, 3) where the first 24 joints are aa and the last joint is root trans xyz.
+        rot   -- sR object of rotation
+    """
+    postproc = False
+    if len(batch.shape) == 3:
+        batch = batch[..., None]
+        postproc = True
+
+    N, _, _, T = batch.shape
+    # Apply rot to global orientation
+    global_orient = batch[:, 0].permute(0, 2, 1).reshape(-1, 3)  # (N * T, 3)
+    rotvec_t = to_tensor(rot.as_rotvec())
+    batch[:,
+          0] = apply_rotvec_to_aa(rotvec_t,
+                                  global_orient).reshape(N, T,
+                                                         3).permute(0, 2, 1)
+
+    # Apply rot to trans
+    trans = batch[:, -1].permute(0, 2, 1).reshape(-1, 3)  # (N * T, 3)
+    rotmat_t = to_tensor(rot.as_matrix())
+    batch[:, -1] = torch.matmul(rotmat_t,
+                                trans.t()).t().reshape(N, T,
+                                                       3).permute(0, 2, 1)
+
+    if postproc:
+        batch = batch[..., 0]
+    return batch
+
+
+def process_sequence(user_i,
+                     seq_i,
+                     get_img_feature=True,
+                     new_interp=False,
+                     viz=False,
+                     return_raw=False,
+                     compute_sideline_view=False):
+    """
+    Input
+        user_i -- e.g., 1
+        seq_i  -- e.g., "Walking.54138969.cdf"
+    """
+    assert new_interp == True  ## otherwise it causes flickering due to incorrect interpolation
+
     # Config
     debug = False
     extract_img = True
@@ -173,6 +268,7 @@ def process_sequence(user_i, seq_i, get_img_feature=True):
 
     # Mosh
     mosh_cam_id = CAMERAS.index(camera)
+    cam_id = mosh_cam_id
     # mosh_cam_id = MOSH_CAMERAS.index(camera)
     mosh_path = osp.join(mosh_dir, user_name,
                          f"{action_w_space}_cam{mosh_cam_id}_aligned.pkl")
@@ -184,19 +280,39 @@ def process_sequence(user_i, seq_i, get_img_feature=True):
 
     mosh = pkl.load(open(mosh_path, 'rb'), encoding="latin1")
 
-    # Upsample frames by linear interpolation
-    def interp(ar1, ar2, w):
-        diff = ar2 - ar1
-        return ar1 + w * diff
+    if not new_interp:
+        # Upsample frames by linear interpolation
+        def interp(ar1, ar2, w):
+            diff = ar2 - ar1
+            return ar1 + w * diff
 
-    N = mosh['new_poses'].shape[0]
-    upsampled = np.zeros((N * 5, 72))
-    for i in range(5):
-        upsampled[np.arange(0, N * 5, 5)[:-1] + i] = interp(
-            mosh['new_poses'][:-1], mosh['new_poses'][1:], i / 5)
+        N = mosh['new_poses'].shape[0]
+        upsampled = np.zeros((N * 5, 72))
+        for i in range(5):
+            upsampled[np.arange(0, N * 5, 5)[:-1] + i] = interp(
+                mosh['new_poses'][:-1], mosh['new_poses'][1:], i / 5)
+    else:
+        steps = torch.linspace(0, 1.0, 5)
+
+        def preproc(arr):
+            T = arr.shape[0]
+            tn = torch.tensor(arr)  # (T, 72)
+            aa = tn.reshape(T, 24, 3).reshape(-1, 3)
+            q = roma.rotvec_to_unitquat(aa)  # (T * 24, 4)
+            return q
+
+        q0 = preproc(mosh['new_poses'][:-1])
+        q1 = preproc(mosh['new_poses'][1:])
+        steps = torch.linspace(0, 1.0, 5)
+        q_int = roma.utils.unitquat_slerp(q0, q1, steps)  # (5, T * 24, 4)
+        q_int = q_int.reshape(5, -1, 24, 4).permute(1, 0, 2,
+                                                    3)  # (T, 5, 24, 4)
+        q_int = q_int.reshape(-1, 24, 4)  # (T * 5, 24, 4)
+        upsampled = roma.unitquat_to_rotvec(q_int.reshape(-1, 4)).reshape(
+            -1, 24, 3).reshape(-1, 72)
 
     # Upsample Mosh
-    mosh_theta = to_tensor(upsampled)
+    mosh_theta = to_tensor(upsampled).float()
 
     # Re-orient RF
     mosh_root_orient = mosh_theta[:, :3]
@@ -204,6 +320,46 @@ def process_sequence(user_i, seq_i, get_img_feature=True):
     mosh_root_orient = apply_rotvec_to_aa2(
         to_tensor(np.pi * np.array([1, 0, 0]))[None], mosh_root_orient)
     mosh_theta[:, :3] = mosh_root_orient
+
+    N = len(poses_3d)
+    Sall = np.reshape(poses_3d, [N, -1, 3]) / 1000.
+    S17 = Sall[:, h36m_idx]
+    trans = S17[:, 7]
+
+    slv_mosh_theta = None
+    slv_trans = None
+
+    if compute_sideline_view:
+        # Get ankles from poses
+        N = poses_3d.shape[0]
+        poses_3d_ = poses_3d.reshape(N, -1, 3)  # [..., [0, 2, 1]]
+        poses_3d_ = poses_3d_[:, h36m_idx]
+        ankles_3d = poses_3d_[:, [3, 6]]
+
+        # Compute rotation
+        vec = find_best_fitting_plane_normal(ankles_3d.reshape(-1, 3))
+        rotmat = find_rotation(vec)
+        rot_sr = sR.from_matrix(rotmat)
+
+        N = min(len(mosh_theta), len(trans))
+        mosh_theta = mosh_theta[:N].reshape(N, 24, 3)
+        trans_t = to_tensor(trans)[:N].unsqueeze(1)
+        batch = torch.cat([mosh_theta, trans_t], 1)
+
+        # Apply rotation
+        rot_batch = apply_rot_to_batch(batch, rot_sr)
+        slv_mosh_theta = to_np(rot_batch[:, :24].reshape(N, 72))
+        slv_trans = to_np(rot_batch[:, 24])  # (N, 3)
+
+    if return_raw:
+        return {
+            'poses_3d': poses_3d,
+            'poses_2d': poses_2d,
+            'mosh_theta': mosh_theta,
+            'trans': trans,
+            'slv_mosh_theta': slv_mosh_theta,
+            'slv_trans': slv_trans,
+        }
 
     # video file
     if extract_img:
@@ -284,64 +440,57 @@ def process_sequence(user_i, seq_i, get_img_feature=True):
             shape.append(mosh['betas'])
             pose.append(mosh_theta[frame_i])
 
-            # # Viz
-            # im = cv2.imread(img_path)
-            # camera_rotation = torch.eye(3).unsqueeze(0).expand(
-            #     1, -1, -1)
-            # camera_translation = torch.zeros(1, 3)
-            # K = torch.load(
-            #     '/home/users/wangkua1/projects/bio-pose/camera_intrinsics.pt'
-            # )
+            # Viz
+            if viz:
+                out_dir = '_h36m_train_utils'
+                os.makedirs(out_dir, exist_ok=True)
+                im = cv2.imread(img_path)
+                camera_rotation = torch.eye(3).unsqueeze(0).expand(1, -1, -1)
+                camera_translation = torch.zeros(1, 3)
+                K = torch.load(
+                    '/home/users/wangkua1/projects/bio-pose/camera_intrinsics.pt'
+                )
 
-            # # projected_keypoints_2d = perspective_projection_with_K(
-            # #     torch.tensor(S24[:,:3])[None].float(),
-            # #     rotation=camera_rotation,
-            # #     translation=camera_translation,
-            # #     K=K).detach().numpy()[0]
-            # # projected_keypoints_2d = np.hstack([projected_keypoints_2d, S24[:, 3:]])
-            # # im1 = add_keypoints_to_image(np.copy(im),
-            # #                              projected_keypoints_2d)
-            # # cv2.imwrite(
-            # #     osp.join(out_dir, f'test_{cam_id}_{frame_i}.png'), im1)
+                # projected_keypoints_2d = perspective_projection_with_K(
+                #     torch.tensor(S24[:,:3])[None].float(),
+                #     rotation=camera_rotation,
+                #     translation=camera_translation,
+                #     K=K).detach().numpy()[0]
+                # projected_keypoints_2d = np.hstack([projected_keypoints_2d, S24[:, 3:]])
+                # im1 = add_keypoints_to_image(np.copy(im),
+                #                              projected_keypoints_2d)
+                # cv2.imwrite(
+                #     osp.join(out_dir, f'test_{cam_id}_{frame_i}.png'), im1)
 
-            # Viz SMPL
-            # mosh_j3d, mosh_v3d = to_np(run_smpl_to_j3d(mosh_theta[frame_i], betas=to_tensor(mosh['betas'])))
-            # mosh_j3d, mosh_v3d = to_np(mosh_j3d), to_np(mosh_v3d)
-            # mosh_j3d = mosh_j3d + S17[7]
+                # Viz SMPL
+                mosh_j3d, mosh_v3d = to_np(
+                    run_smpl_to_j3d(mosh_theta[frame_i],
+                                    betas=to_tensor(mosh['betas'])))
+                mosh_j3d, mosh_v3d = to_np(mosh_j3d), to_np(mosh_v3d)
+                mosh_j3d = mosh_j3d + S17[7]
 
-            # # Apply rotation
-            # # rot = sR.from_rotvec(np.pi * np.array([1, 0, 0]))
-            # # mosh_j3d = rot.apply(mosh_j3d)
-            # # mosh_v3d = rot.apply(mosh_v3d)
+                nim = np.zeros((IMG_D0, IMG_D1, 3))
+                nim[:im.shape[0], :im.shape[1]] = im
+                im1 = renderer(mosh_v3d,
+                               camera_translation,
+                               np.copy(nim),
+                               return_camera=False)
+                cv2.imwrite(
+                    osp.join(out_dir, f'test_mosh_{cam_id}_{frame_i}.png'),
+                    im1)
 
-            # # mosh_j3d[:, 1] *= -1
-            # # mosh_v3d[:, 1] *= -1
-            # # mosh_j3d[:, 0] *= -1
-            # # mosh_v3d[:, 0] *= -1
-            # # mosh_j3d = to_np(run_smpl_to_j3d(mosh_theta[frame_i], betas=to_tensor(mosh['betas']))) * -1
-            # mosh_j3d = mosh_j3d + root_trans
-            # mosh_v3d = mosh_v3d + root_trans
-
-            # nim = np.zeros((IMG_D0, IMG_D1, 3))
-            # nim[:im.shape[0], :im.shape[1]] = im
-            # im1 = renderer(
-            #     mosh_v3d,
-            #     camera_translation,
-            #     np.copy(nim),
-            #     return_camera=False)
-
-            # projected_keypoints_2d_mosh = perspective_projection_with_K(
-            #     torch.tensor(mosh_j3d)[None].float(),
-            #     rotation=camera_rotation,
-            #     translation=camera_translation,
-            #     K=K).detach().numpy()[0]
-            # projected_keypoints_2d_mosh = projected_keypoints_2d_mosh[-24:, :]
-            # projected_keypoints_2d_mosh = np.hstack([projected_keypoints_2d_mosh, S24[:, 3:]])
-            # im2 = add_keypoints_to_image(np.copy(im1),
-            #                              projected_keypoints_2d_mosh)
-            # cv2.imwrite(
-            #     osp.join(out_dir, f'test_mosh_{cam_id}_{frame_i}.png'),
-            #     im2)
+                # projected_keypoints_2d_mosh = perspective_projection_with_K(
+                #     torch.tensor(mosh_j3d)[None].float(),
+                #     rotation=camera_rotation,
+                #     translation=camera_translation,
+                #     K=K).detach().numpy()[0]
+                # projected_keypoints_2d_mosh = projected_keypoints_2d_mosh[-24:, :]
+                # projected_keypoints_2d_mosh = np.hstack([projected_keypoints_2d_mosh, S24[:, 3:]])
+                # im2 = add_keypoints_to_image(np.copy(im1),
+                #                              projected_keypoints_2d_mosh)
+                # cv2.imwrite(
+                #     osp.join(out_dir, f'test_mosh_{cam_id}_{frame_i}.png'),
+                #     im2)
 
     vid_name = np.array(vid_name)
     img_paths_array = np.array(img_paths_array)
@@ -374,6 +523,53 @@ def process_sequence(user_i, seq_i, get_img_feature=True):
         dataset['features'].append(features)
 
     return dataset
+
+
+def recompute_slv(user_i, out_dir, prev_cache_dir):
+    """
+    Recompute Sideline-View `mosh` and `trans` and write to new directory.
+    """
+    dataset_path = H36M_DIR
+
+    user_list = [user_i]
+
+    seq_db_list = []
+
+    # go over each user
+    for user_count, user_i in enumerate(user_list):
+        # go over all the sequences of each user
+        user_name = 'S%d' % user_i
+        pose_path = os.path.join(dataset_path, user_name, 'MyPoseFeatures',
+                                 'D3_Positions_mono')
+        seq_list = glob.glob(os.path.join(pose_path, '*.cdf'))
+        seq_list.sort()
+
+        for seq_count, seq_i in enumerate(seq_list):
+            seq_base = osp.basename(seq_i)
+            cache_name = f'{user_i}_{seq_base}.pt'
+            print(cache_name)
+
+            new_cache_path = osp.join(out_dir, cache_name)
+            if osp.exists(new_cache_path):
+                continue  # Skip
+
+            seq_db = process_sequence(user_i,
+                                      seq_i,
+                                      return_raw=True,
+                                      new_interp=True,
+                                      compute_sideline_view=True)
+
+            # Load prev cache
+            old_db = joblib.load(osp.join(prev_cache_dir, cache_name))
+            if old_db is None:
+                continue
+
+
+            old_db['slv_mosh_theta'] = seq_db['slv_mosh_theta']
+            old_db['slv_trans'] = seq_db['slv_trans']
+
+            # Save to cache
+            joblib.dump(old_db, new_cache_path)
 
 
 def add_trans_to_db(user_i, out_dir, prev_cache_dir):
@@ -410,10 +606,107 @@ def add_trans_to_db(user_i, out_dir, prev_cache_dir):
 
             # Load prev cache
             old_db = joblib.load(osp.join(prev_cache_dir, cache_name))
+            if old_db is None:
+                continue
             old_db['trans'] = seq_db['trans']
 
             # Save to cache
             joblib.dump(old_db, new_cache_path)
+
+
+def reprocess_sequence(user_i, out_dir, prev_cache_dir):
+    """
+    Re-process sequences using the new (and correct) interpolation without image feature extraction.
+    """
+    dataset_path = H36M_DIR
+
+    user_list = [user_i]
+
+    seq_db_list = []
+
+    # go over each user
+    for user_count, user_i in enumerate(user_list):
+        # go over all the sequences of each user
+        user_name = 'S%d' % user_i
+        pose_path = os.path.join(dataset_path, user_name, 'MyPoseFeatures',
+                                 'D3_Positions_mono')
+        seq_list = glob.glob(os.path.join(pose_path, '*.cdf'))
+        seq_list.sort()
+
+        for seq_count, seq_i in enumerate(seq_list):
+            seq_base = osp.basename(seq_i)
+            cache_name = f'{user_i}_{seq_base}.pt'
+            print(cache_name)
+
+            new_cache_path = osp.join(out_dir, cache_name)
+            if osp.exists(new_cache_path):
+                continue  # Skip
+
+            seq_db = process_sequence(user_i,
+                                      seq_i,
+                                      get_img_feature=False,
+                                      new_interp=True)
+
+            if seq_db is not None:
+                seq_db_list.append(seq_db)
+
+            # Load prev cache
+            old_db_path = osp.join(prev_cache_dir, cache_name)
+            if not osp.exists(osp.join(prev_cache_dir, cache_name)):
+                continue
+
+            old_db = joblib.load(old_db_path)
+            if old_db is None:
+                continue
+
+            raise
+            seq_db['trans'] = old_db['features']  # BOO BOO
+
+            # Save to cache
+            joblib.dump(seq_db, new_cache_path)
+
+
+def replace_trans(user_i, out_dir, prev_cache_dir):
+    """
+    to fix error occurred in reprocess_sequence `seq_db['trans'] = old_db['features']`.
+    """
+    dataset_path = H36M_DIR
+
+    user_list = [user_i]
+
+    # go over each user
+    for user_count, user_i in enumerate(user_list):
+        # go over all the sequences of each user
+        user_name = 'S%d' % user_i
+        pose_path = os.path.join(dataset_path, user_name, 'MyPoseFeatures',
+                                 'D3_Positions_mono')
+        seq_list = glob.glob(os.path.join(pose_path, '*.cdf'))
+        seq_list.sort()
+
+        for seq_count, seq_i in enumerate(seq_list):
+            seq_base = osp.basename(seq_i)
+            cache_name = f'{user_i}_{seq_base}.pt'
+            print(cache_name)
+
+            new_cache_path = osp.join(out_dir, cache_name)
+            if not osp.exists(new_cache_path):
+                continue
+            seq_db = joblib.load(new_cache_path)
+
+            # Load prev cache
+            old_db_path = osp.join(prev_cache_dir, cache_name)
+            if not osp.exists(osp.join(prev_cache_dir, cache_name)):
+                continue
+
+            old_db = joblib.load(old_db_path)
+            if old_db is None:
+                continue
+
+            seq_db['trans'] = old_db['trans']
+            seq_db['features'] = old_db['features']
+
+            # Save to cache
+            joblib.dump(seq_db, new_cache_path)
 
 
 def read_db(split, user_i=0, out_dir=None, use_cache_only=False):
@@ -454,13 +747,18 @@ def read_db(split, user_i=0, out_dir=None, use_cache_only=False):
                 if out_dir is not None:
                     joblib.dump(seq_db, osp.join(out_dir, cache_name))
 
+            # Ensure all values have the same lengths
+            N = np.min([len(seq_db['slv_mosh_theta']), len(seq_db['pose'][0])])
+            seq_db['slv_mosh_theta'] = [seq_db['slv_mosh_theta'][:N]]
+            seq_db['slv_trans'] = [seq_db['slv_trans'][:N]]
+
             if seq_db is not None:
                 seq_db_list.append(seq_db)
 
     dataset = defaultdict(list)
     for seq_db in seq_db_list:
         for k, v in seq_db.items():
-            dataset[k] += v
+            dataset[k] += list(v)
 
     final_dataset = {}
     print(list(dataset.keys()))

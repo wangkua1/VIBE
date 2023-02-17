@@ -1,6 +1,6 @@
 # This dataset is mostly a copy of amass.py in the same directory, except mofied
-# to match the format of mdm dataloaders for action to motion (a2m). This is a 
-# temp solution so we can plug it in easily. 
+# to match the format of mdm dataloaders for action to motion (a2m). This is a
+# temp solution so we can plug it in easily.
 
 # -*- coding: utf-8 -*-
 
@@ -31,6 +31,7 @@ import os.path as osp
 from mdm.utils import rotation_conversions
 from lib.core.config import VIBE_DB_DIR
 from lib.data_utils.img_utils import split_into_chunks
+
 
 class VibeDataset(Dataset):
     def __init__(self, num_frames, dataset='amass', split='train', restrict_subsets=None, 
@@ -68,9 +69,11 @@ class VibeDataset(Dataset):
 
         self.stride = self.seqlen
 
-        self.db = self.load_db(split=split, subsample=self.SUBSAMPLE[self.dataset])
+        self.db = self.load_db(split=split,
+                               subsample=self.SUBSAMPLE[self.dataset])
 
-        self.vid_indices = split_into_chunks(np.array(self.db['vid_name']), self.seqlen, self.stride)
+        self.vid_indices = split_into_chunks(np.array(self.db['vid_name']),
+                                             self.seqlen, self.stride)
         # del self.db['vid_name']
 
         if not restrict_subsets is None:
@@ -106,6 +109,7 @@ class VibeDataset(Dataset):
         about x-axis, switching the  rotation of the root joint (joint idx 0),
          and then flipping the.
         """
+
         print("   Dataloader: doing 6d rotations")
         device='cuda'if torch.cuda.is_available() else 'cpu'
         
@@ -114,11 +118,13 @@ class VibeDataset(Dataset):
         transes = torch.tensor(self.db['trans']).to(device).float()
 
         dset = TensorDataset(thetas, transes)
-        loader = DataLoader(dset, batch_size=2048*2, shuffle=False, drop_last=False)
+        loader = DataLoader(dset,
+                            batch_size=2048 * 2,
+                            shuffle=False,
+                            drop_last=False)
         all_data = []
         fc_mask = []
         
-        import ipdb; ipdb.set_trace
         for theta, trans in tqdm.tqdm(loader):
             # like in amass dataset, concat a [1,0,0]: camera orientation (it will be)
             # removed, this is just for consistency
@@ -128,37 +134,39 @@ class VibeDataset(Dataset):
             # theta = torch.tensor(theta).to(device)
 
             ### now get the required pose vector
-            pose = theta[...,3:75]     # (T,72)
-            pose = pose.view(pose.shape[0], 24, 3) # (T,24,3)
+            pose = theta[..., 3:75]  # (T,72)
+            pose = pose.view(pose.shape[0], 24, 3)  # (T,24,3)
 
             ## if flagged, rotate the root orientation -90deg about x
             if do_rotate_about_x:
-                root = pose.clone()[:,[0],:]
-                root_rotated = apply_rotvec_to_aa2( 
-                    torch.Tensor(np.pi/2*np.array([-1,0,0])[None]).to(pose.device).float(),
-                    root.view(-1,3),
-                    ).view(root.shape)
-                pose[...,[0],:] = root_rotated
+                root = pose.clone()[:, [0], :]
+                root_rotated = apply_rotvec_to_aa2(
+                    torch.Tensor(np.pi / 2 * np.array([-1, 0, 0])[None]).to(
+                        pose.device).float(),
+                    root.view(-1, 3),
+                ).view(root.shape)
+                pose[..., [0], :] = root_rotated
 
-            ## convert it to 6d representation that we need for the model 
+            ## convert it to 6d representation that we need for the model
             pose_6d = rotation_conversions.matrix_to_rotation_6d(
-                rotation_conversions.axis_angle_to_matrix(
-                    pose
-            )) # (T,24,6)
+                rotation_conversions.axis_angle_to_matrix(pose))  # (T,24,6)
 
             # get translation and add dummy values to match the 6d rep
-            trans[...,[0,2]] -=  trans[0,[0,2]].unsqueeze(0)  # center the x and z coords.
-            trans = torch.cat((trans, torch.zeros((trans.shape[0], 3), device=trans.device)), -1) # (N,T,6)
+            trans[..., [0, 2]] -= trans[0, [0, 2]].unsqueeze(
+                0)  # center the x and z coords.
+            trans = torch.cat(
+                (trans, torch.zeros(
+                    (trans.shape[0], 3), device=trans.device)), -1)  # (N,T,6)
             trans = trans.unsqueeze(1)  # (T,1,6)
 
             ## if flagged, the translation also needs to change axes
             if do_rotate_about_x:
                 trans_copy = trans.clone()
-                trans[...,1] = trans_copy[...,2].clone()
-                trans[...,2] = -trans_copy[...,1].clone()
+                trans[..., 1] = trans_copy[..., 2].clone()
+                trans[..., 2] = -trans_copy[..., 1].clone()
 
             # append the translation to the joint angle
-            data = torch.cat((pose_6d, trans), 1) # (T,25,6)
+            data = torch.cat((pose_6d, trans), 1)  # (T,25,6)
             all_data.append(data.cpu().float())
 
             # if flagged, compute the foot contact mask
@@ -177,11 +185,9 @@ class VibeDataset(Dataset):
     def compute_fc_mask(self):
         assert hasattr(self,db) and hasattr(self.db, 'pose_6d'), "must run `create_db_6d_upfront` first"
 
-
-
         self.db['fc_mask'] = None
         return
-    
+
     def filter_videos(self):
         """
         Filter videos based where vidnames have the strings 
@@ -193,9 +199,8 @@ class VibeDataset(Dataset):
 
         mask_remove_vid = torch.zeros(len(vid_names))
         for filter_name in FILTER_NAMES:
-            mask_remove_vid = mask_remove_vid + np.array(
-                [(filter_name in v) for v in vid_names]
-                )
+            mask_remove_vid = mask_remove_vid + np.array([(filter_name in v)
+                                                          for v in vid_names])
         idxs_keep_vid = np.where(~mask_remove_vid.bool())[0]
         self.vid_indices = [self.vid_indices[i] for i in idxs_keep_vid]
 
@@ -210,10 +215,16 @@ class VibeDataset(Dataset):
         """  """
         # get the subdataset name for each video in the dataset
         start_idxs = np.array([d[0] for d in self.vid_indices])
-        vid_subdataset = [s.split("_")[0] for s in self.db['vid_name'][start_idxs] ]
-        valid_subsets = ['ACCAD', 'BioMotionLab', 'CMU', 'EKUT', 'Eyes', 'HumanEva', 'KIT',
-                            'MPI', 'SFU', 'SSM', 'TCD', 'TotalCapture', 'Transitions']
-        assert np.all(np.isin(restrict_subsets, valid_subsets)), f"invalid subsets list {restrict_subsets}"
+        vid_subdataset = [
+            s.split("_")[0] for s in self.db['vid_name'][start_idxs]
+        ]
+        valid_subsets = [
+            'ACCAD', 'BioMotionLab', 'CMU', 'EKUT', 'Eyes', 'HumanEva', 'KIT',
+            'MPI', 'SFU', 'SSM', 'TCD', 'TotalCapture', 'Transitions'
+        ]
+        assert np.all(
+            np.isin(restrict_subsets,
+                    valid_subsets)), f"invalid subsets list {restrict_subsets}"
 
         idxs_keep = np.where(np.isin(vid_subdataset, restrict_subsets))[0]
         self.vid_indices = [self.vid_indices[i] for i in idxs_keep]
@@ -252,11 +263,14 @@ class VibeDataset(Dataset):
             user_list = [1, 5, 6, 7, 8]
         elif split in ['val','test']: # JB added test for compatibility with mdm.sample.generate
             user_list = [9, 11]
+        else:  
+            user_list = [1]
 
         seq_db_list = []
         for user_i in user_list:
-            print(f"  Loading Subject S{user_i}" )
-            db_subset = joblib.load(osp.join(VIBE_DB_DIR, f'h36m_{user_i}_db.pt'))
+            print(f"  Loading Subject S{user_i}")
+            db_subset = joblib.load(
+                osp.join(VIBE_DB_DIR, f'h36m_{user_i}_db.pt'))
             seq_db_list.append(db_subset)
 
         dataset = defaultdict(list)
@@ -264,7 +278,11 @@ class VibeDataset(Dataset):
         for seq_db in seq_db_list:
             for k, v in seq_db.items():
                 dataset[k] += list(v)
-        
+
+        # JW: temporary hack -- use slv data here
+        dataset['pose'] = dataset['slv_mosh_theta']
+        dataset['trans'] = dataset['slv_trans']
+
         dataset = self.subsample(dataset, subsample)
 
         # convert to array
@@ -287,23 +305,24 @@ class VibeDataset(Dataset):
     def get_single_item(self, index):
         start_index, end_index = self.vid_indices[index]
 
-        data = self.db['pose_6d'][start_index:end_index+1]
-        data = data.permute(1,2,0)              # (25,6,T)
+        data = self.db['pose_6d'][start_index:end_index + 1]
+        data = data.permute(1, 2, 0)  # (25,6,T)
         vid_name = self.db['vid_name'][start_index]
 
         if self.normalize_translation:
             # has format (J,6,T). translation is the last joint (dim 0)
-            data[-1,:,:] = data[-1,:,:] - data[-1,:,[0]] 
+            data[-1, :, :] = data[-1, :, :] - data[-1, :, [0]]
 
         ret = dict(
-                inp=data.float(),
-                action_text='',
-                vid_name=vid_name,
-                )
+            inp=data.float(),
+            action_text='',
+            vid_name=vid_name,
+        )
         if 'features' in self.db.keys():
-            ret['features'] = self.db['features'][start_index:end_index+1]
+            ret['features'] = self.db['features'][start_index:end_index + 1]
 
         return ret
+
 
 def apply_rotvec_to_aa2(rotvec, aa):
     N = aa.shape[0]
