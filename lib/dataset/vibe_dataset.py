@@ -34,18 +34,8 @@ from lib.data_utils.img_utils import split_into_chunks
 
 
 class VibeDataset(Dataset):
-<<<<<<< HEAD
-
-    def __init__(self,
-                 num_frames,
-                 split='train',
-                 restrict_subsets=None,
-                 dataset='amass',
-                 normalize_translation=True):
-=======
     def __init__(self, num_frames, split='train', restrict_subsets=None, 
         dataset='amass', normalize_translation=True, correct_frame_of_reference=False):
->>>>>>> bfbd3261148a3ad7a9b98137f73c6a25c0de0ad8
         """
         Args:
             dataset (str): one of ('amass','h36m')
@@ -57,14 +47,9 @@ class VibeDataset(Dataset):
                 If None, then it 
         """
         self.SUBSAMPLE = {
-<<<<<<< HEAD
-            'amass': 1,
-            'h36m': 2,
-=======
             'amass' : 1,
             'h36m' : 2,
             '3dpw' : 1,
->>>>>>> bfbd3261148a3ad7a9b98137f73c6a25c0de0ad8
         }
         self.dataset = dataset
         self.dataname = dataset  # mdm training code uses this
@@ -111,21 +96,12 @@ class VibeDataset(Dataset):
         about x-axis, switching the  rotation of the root joint (joint idx 0),
          and then flipping the.
         """
-<<<<<<< HEAD
-        print(
-            "   Dataloader: doing 6d rotations and shifting the reference frame"
-        )
-        device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-        pose_key = 'theta' if self.dataset == 'amass' else 'pose'
-        thetas = torch.tensor(self.db[pose_key]).to(device).float()
-=======
         print("   Dataloader: doing 6d rotations")
         device='cuda'if torch.cuda.is_available() else 'cpu'
         
         pose_key = 'theta' if self.dataset=='amass' else 'pose'
         thetas = torch.tensor(self.db[pose_key]).to(device).float() # pose and beta
->>>>>>> bfbd3261148a3ad7a9b98137f73c6a25c0de0ad8
         transes = torch.tensor(self.db['trans']).to(device).float()
 
         dset = TensorDataset(thetas, transes)
@@ -134,23 +110,11 @@ class VibeDataset(Dataset):
                             shuffle=False,
                             drop_last=False)
         all_data = []
-<<<<<<< HEAD
-
-        for theta, trans in tqdm.tqdm(loader):
-            # like in amass dataset, concat a [1,0,0]: camera orientation (it will be)
-            # removed, this is just for consistency
-            cam = np.array([1., 0., 0.])[None, ...]
-            cam = torch.Tensor(np.repeat(cam, theta.shape[0],
-                                         axis=0)).to(device)
-=======
-        
-        import ipdb; ipdb.set_trace
         for theta, trans in tqdm.tqdm(loader):
             # like in amass dataset, concat a [1,0,0]: camera orientation (it will be)
             # removed, this is just for consistency
             cam = np.array([1., 0., 0.], dtype=np.float32)[None, ...]
             cam = torch.Tensor(np.repeat(cam, theta.shape[0], axis=0)).to(device)
->>>>>>> bfbd3261148a3ad7a9b98137f73c6a25c0de0ad8
             theta = torch.cat([cam, theta], -1).to(device)
             # theta = torch.tensor(theta).to(device)
 
