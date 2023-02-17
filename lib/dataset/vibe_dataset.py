@@ -234,6 +234,8 @@ class VibeDataset(Dataset):
                 'val', 'test'
         ]:  # JB added test for compatibility with mdm.sample.generate
             user_list = [9, 11]
+        else:  
+            user_list = [1]
 
         seq_db_list = []
         for user_i in user_list:
@@ -246,6 +248,10 @@ class VibeDataset(Dataset):
         for seq_db in seq_db_list:
             for k, v in seq_db.items():
                 dataset[k] += list(v)
+
+        # JW: temporary hack -- use slv data here
+        dataset['pose'] = dataset['slv_mosh_theta']
+        dataset['trans'] = dataset['slv_trans']
 
         dataset = self.subsample(dataset, subsample)
 
