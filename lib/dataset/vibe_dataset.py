@@ -37,7 +37,7 @@ from lib.data_utils.img_utils import split_into_chunks
 class VibeDataset(Dataset):
     def __init__(self, num_frames, dataset='amass', split='train', restrict_subsets=None, 
         data_rep='rot6d', foot_vel_threshold=0.01, normalize_translation=True, 
-        correct_frame_of_reference=False):
+        correct_frame_of_reference=False, no_motion=False):
         """
         Args:
             dataset (str): one of ('amass','h36m')
@@ -48,6 +48,7 @@ class VibeDataset(Dataset):
             correct_frame_of_reference: (depracated) whether to switch y- and z- axis, which is needed sometimes
                 If None, then it 
             data_rep (str): one of ('rot6d', 'rot6d_p_fc')
+            no_motion (bool):
         """
         self.device='cuda'if torch.cuda.is_available() else 'cpu'
         self.SUBSAMPLE = {
@@ -67,6 +68,7 @@ class VibeDataset(Dataset):
         # }
         self.dataset=dataset 
         self.dataname=dataset   # mdm training code uses this
+        self.num_frames=num_frames
         self.split=split
         self.data_rep=data_rep
         self.restrict_subsets=restrict_subsets
@@ -77,11 +79,18 @@ class VibeDataset(Dataset):
         self.stride = self.seqlen
 
         self.db = self.load_db(split=split,
-                               subsample=self.SUBSAMPLE[self.dataset])
+                subsample=self.SUBSAMPLE[self.dataset])
 
         self.vid_indices = split_into_chunks(np.array(self.db['vid_name']),
                                              self.seqlen, self.stride)
-        # del self.db['vid_name']
+        
+        self.no_motion=no_motion
+        if self.no_motion: 
+            # Preporcessing funcs take a few mins for the full dataset, reduce the dataset size. 
+            # Should be as bigger than a typical batch size, otherwise calls to next() will
+            N=100 
+            print(f"   Dataset: only loading {N} samples")
+            self.vid_indices = self.vid_indices[:N]
 
         if not restrict_subsets is None:
             # if True, this overwrites the `vid_indices` object with a restricted version
@@ -137,7 +146,10 @@ class VibeDataset(Dataset):
         all_data = []
         all_foot_vels = []
         
-        for theta, trans in tqdm.tqdm(loader):
+        for i, (theta, trans) in enumerate(tqdm.tqdm(loader)):
+            # first, break after 1 iteration if we have `no_motion` flag set
+            if self.no_motion and i>1:  
+                break
             # like in amass dataset, concat a [1,0,0]: camera orientation (it will be)
             # removed, this is just for consistency
             cam = np.array([1., 0., 0.], dtype=np.float32)[None, ...]
@@ -199,13 +211,13 @@ class VibeDataset(Dataset):
         assert J==25 and D==6
         foot_vel = torch.zeros((T,4), dtype=torch.float32, device='cpu')
         # iterate over batches of vid indices
-        batch_size = 128
+        batch_size = 128*60//self.num_frames # scale wrt vid length to prevent OOM error 
         loader = DataLoader(TensorDataset(torch.tensor(self.vid_indices)),
                             batch_size=batch_size,
                             shuffle=False,
                             drop_last=False)
         
-        print("  Dataloader: getting foot contact data")
+        print(f"  Dataloader: getting foot contact data with velocity threshold [{foot_vel_threshold}]")
         for batch_idx, (idxs,) in enumerate(tqdm.tqdm(loader)):
             # get the frames in a continuous sequnce
             start_idx, end_idx = idxs[:,0], idxs[:,1]
