@@ -34,6 +34,9 @@ from VIBE.lib.utils.renderer import Renderer as VIBERenderer
 import roma
 from scipy.spatial.transform import Rotation as sR
 
+from gthmr.lib.utils.geometry import *
+
+
 ACTIONS = [
     "Directions 1", "Directions", "Discussion 1", "Discussion", "Eating 2",
     "Eating", "Greeting 1", "Greeting", "Phoning 1", "Phoning", "Posing 1",
@@ -76,16 +79,6 @@ def action_id_without_chair0(s):
         [get_action_name_from_action_id(s) for s in ACTIONS_WITHOUT_CHAIR])
 
 
-def apply_rotvec_to_aa(rotvec, aa):
-    N = aa.shape[0]
-    rotvec = rotvec.repeat(N, 1)
-    return roma.rotvec_composition([rotvec, aa])
-
-
-def apply_rotvec_to_aa2(rotvec, aa):
-    N = aa.shape[0]
-    rotvec = rotvec.repeat(N, 1)
-    return roma.rotvec_composition([aa, rotvec])
 
 
 def rotvec_to_points(rotvec, points):
