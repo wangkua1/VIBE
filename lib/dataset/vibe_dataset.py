@@ -383,7 +383,7 @@ class VibeDataset(Dataset):
         for seq_db in seq_db_list:
             for k, v in seq_db.items():
                 dataset[k] += list(v)
-
+                
         dataset['cam_view_pose'] = dataset['pose']
         dataset['cam_view_trans'] = dataset['trans']
 
