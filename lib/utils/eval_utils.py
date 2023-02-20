@@ -3,7 +3,7 @@
 
 import torch
 import numpy as np
-
+from nemo.utils.misc_utils import to_np, to_tensor
 
 def compute_accel(joints):
     """
@@ -288,3 +288,24 @@ def compute_errors(gt3ds, preds):
         errors_pa.append(np.mean(pa_error))
 
     return errors, errors_pa
+
+def compute_mpjpe(pred_j3ds, target_j3ds):
+        pred_j3ds = to_tensor(pred_j3ds)
+        target_j3ds = to_tensor(target_j3ds)
+
+        print(f'Evaluating on {pred_j3ds.shape[0]} number of poses...')
+        pred_pelvis = (pred_j3ds[:, [2], :] + pred_j3ds[:, [3], :]) / 2.0
+        target_pelvis = (target_j3ds[:, [2], :] + target_j3ds[:, [3], :]) / 2.0
+
+        pred_j3ds -= pred_pelvis
+        target_j3ds -= target_pelvis
+        # Absolute error (MPJPE)
+        errors = torch.sqrt(
+            ((pred_j3ds -
+              target_j3ds)**2).sum(dim=-1)).mean(dim=-1).cpu().numpy()
+        S1_hat = batch_compute_similarity_transform_torch(
+            pred_j3ds, target_j3ds)
+        errors_pa = torch.sqrt(
+            ((S1_hat -
+              target_j3ds)**2).sum(dim=-1)).mean(dim=-1).cpu().numpy()
+        return errors, errors_pa
