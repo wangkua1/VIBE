@@ -218,7 +218,7 @@ class VibeDataset(Dataset):
             thetas, transes)
 
         # For HMR datasets, do the same for camera-view data
-        if self.dataset == 'amass':
+        if self.dataset in ('amass','amass_hml'):
             pass
         elif self.dataset == 'h36m':
             cv_thetas = torch.tensor(self.db['cam_view_pose']).to(
@@ -497,7 +497,7 @@ class VibeDataset(Dataset):
 
             # rotation augmentation about y (vertical) axis
             if self.rotation_augmentation:
-                pose6d = rotate_about_D(pose6d, rand_root_rot, D=1)
+                pose6d = rotate_about_y(pose6d, rand_root_rot)
 
             if self.data_rep == "rot6d_fc":
                 fc_mask = self.db['fc_mask'][start_index:end_index +
