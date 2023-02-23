@@ -53,6 +53,7 @@ def read_data(folder, set, debug=False):
         'img_name': [],
         'features': [],
         'valid': [],
+        'pose_original' : [],
     }
 
     model = spin.get_pretrained_hmr()
@@ -65,7 +66,7 @@ def read_data(folder, set, debug=False):
     if set == 'test' or set == 'validation':
         J_regressor = torch.from_numpy(np.load(osp.join(VIBE_DATA_DIR, 'J_regressor_h36m.npy'))).float()
 
-    for i, seq in tqdm(enumerate(sequences)):
+    for i, seq in tqdm(enumerate(sequences), total=len(sequences)):
 
         data_file = osp.join(folder, 'sequenceFiles', set, seq + '.pkl')
 
@@ -79,6 +80,7 @@ def read_data(folder, set, debug=False):
 
         for p_id in range(num_people):
             pose = torch.from_numpy(data['poses'][p_id]).float()
+            pose_original = torch.from_numpy(data['poses'][p_id]).clone().float()
             shape = torch.from_numpy(data['betas'][p_id][:10]).float().repeat(pose.size(0), 1)
             trans = torch.from_numpy(data['trans'][p_id]).float()
             j2d = data['poses2d'][p_id].transpose(0,2,1)
@@ -122,7 +124,6 @@ def read_data(folder, set, debug=False):
 
             # print('j2d', j2d[time_pt1:time_pt2].shape)
             # print('campose', campose_valid[time_pt1:time_pt2].shape)
-
             img_paths_array = np.array(img_paths)[time_pt1:time_pt2]
             dataset['vid_name'].append(np.array([f'{seq}_{p_id}']*num_frames)[time_pt1:time_pt2])
             dataset['frame_id'].append(np.arange(0, num_frames)[time_pt1:time_pt2])
@@ -134,11 +135,11 @@ def read_data(folder, set, debug=False):
             dataset['trans'].append(trans.numpy()[time_pt1:time_pt2])
             dataset['bbox'].append(bbox)
             dataset['valid'].append(campose_valid[time_pt1:time_pt2])
+            dataset['pose_original'].append(pose_original.numpy()[time_pt1:time_pt2])
 
             features = extract_features(model, img_paths_array, bbox,
                                         kp_2d=j2d[time_pt1:time_pt2], debug=debug, dataset='3dpw', scale=1.2)
             dataset['features'].append(features)
-            ipdb.set_trace()
             
     for k in dataset.keys():
         dataset[k] = np.concatenate(dataset[k])
@@ -169,4 +170,4 @@ if __name__ == '__main__':
     # joblib.dump(dataset, osp.join(VIBE_DB_DIR, '3dpw_test_db.pt'))
 
     dataset = read_data(args.dir, 'train', debug=debug)
-    # joblib.dump(dataset, osp.join(VIBE_DB_DIR, '3dpw_train_db.pt'))
+    joblib.dump(dataset, osp.join(VIBE_DB_DIR, '3dpw_train_db.pt'))

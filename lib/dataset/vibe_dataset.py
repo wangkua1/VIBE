@@ -16,7 +16,7 @@
 # der Wissenschaften e.V. (MPG). acting on behalf of its Max Planck Institute
 # for Intelligent Systems. All rights reserved.
 #
-# Contact: ps-license@tuebingen.mpg.de
+# Contact: ps-license@tuebingen.mpg.de h36m_and_amass_rot6d.yml
 
 import ipdb
 import os
@@ -43,15 +43,21 @@ class VibeDataset(Dataset):
                  num_frames,
                  dataset='amass',
                  split='train',
+                 sideline_view=True,
                  restrict_subsets=None,
                  data_rep='rot6d',
                  foot_vel_threshold=0.01,
                  normalize_translation=True,
                  rotation_augmentation=False,
-                 no_motion=False):
+                 no_motion=False,
+                 DEBUG=False
+                 ):
         """
         Args:
             dataset (str): one of ('amass','h36m')
+            sideline_view (bool): if True, then dataset key `inp` (which dataloaders interpret as `x` data to be 
+                passed to the MDM model) will be sideline view. Otherwise camera view. Default True. The returned 
+                dictionary will have both objects as (`cam_view_pose`,) and `slv_mosh_theta`.
             restrict_subsets: a list of strings of subsets to include in the final dataset
                 If None then include all subdatasets. Valid subdataset names are:
                 ['ACCAD', 'BioMotionLab', 'CMU', 'EKUT', 'Eyes', 'HumanEva', 'KIT',
@@ -60,7 +66,9 @@ class VibeDataset(Dataset):
                 If None, then it 
             data_rep (str): one of ('rot6d', 'rot6d_p_fc')
             no_motion (bool):
+
         """
+        self.DEBUG=DEBUG
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         self.SUBSAMPLE = {
             'amass': 1,
@@ -70,6 +78,7 @@ class VibeDataset(Dataset):
         }
         self.dataset = dataset
         self.dataname = dataset  # mdm training code uses this
+        self.sideline_view=sideline_view
         self.num_frames = num_frames
         self.split = split
         self.data_rep = data_rep
@@ -149,7 +158,9 @@ class VibeDataset(Dataset):
                             drop_last=False)
         all_data = []
         all_foot_vels = []
-        for i, (theta, trans) in enumerate(tqdm.tqdm(loader)):
+        for i, (theta_, trans_) in enumerate(tqdm.tqdm(loader)):
+            theta, trans = theta_.clone(), trans_.clone()
+
             # first, break after 1 iteration if we have `no_motion` flag sets
             if self.no_motion and i > 1:
                 break
@@ -189,6 +200,7 @@ class VibeDataset(Dataset):
         if dataset in ('amass','amass_hml'):
             return rotate_about_D(data.unsqueeze(-1), -np.pi/2, 0).squeeze(-1)
         elif dataset in('h36m','3dpw'):
+            # return data 
             return rotate_about_D(data.unsqueeze(-1), np.pi, 0).squeeze(-1)
         else:
             raise ValueEror
@@ -221,14 +233,25 @@ class VibeDataset(Dataset):
         if self.dataset in ('amass','amass_hml'):
             pass
         elif self.dataset == 'h36m':
+            # Have two data views of the same pose data: cam_view and slv (sideline view). One of 
+            # them will be assigned to self.db['pose'] depending on the flag `self.sideline_view`. 
+            # But we will return copies of both views in 6d format
             cv_thetas = torch.tensor(self.db['cam_view_pose']).to(
                 self.device).float()  # pose and beta
             cv_transes = torch.tensor(self.db['cam_view_trans']).to(
                 self.device).float()
             self.db['cv_pose_6d'] = self._create_6d_from_theta(
                 cv_thetas, cv_transes)
+            
+            slv_thetas = torch.tensor(self.db['slv_mosh_theta']).to(
+                self.device).float()  # pose and beta
+            slv_trans = torch.tensor(self.db['slv_trans']).to(
+                self.device).float()  # pose and beta
+            self.db['slv_pose_6d'] = self._create_6d_from_theta(
+                cv_thetas, cv_transes)
         else:
-            raise ValueError("Please implement this ... ")
+            pass
+            # raise ValueError("Please implement this ... ")
 
     def compute_fc_mask(self, foot_vel_threshold=0.03):
         assert hasattr(self, 'db') and (
@@ -239,7 +262,7 @@ class VibeDataset(Dataset):
             'pose_6d'
             in self.db.keys()), "must run `create_db_6d_upfront` first"
 
-        # this rot6d->xyz conversion code from the original
+        # this rot6d->xyz conversion code `from motion-diffusion-model` repo (modified)
         self.rot2xyz = Rotation2xyz(device=self.device, dataset=self.dataset)
         self.get_xyz = lambda sample: self.rot2xyz(sample,
                                                    mask=None,
@@ -387,8 +410,13 @@ class VibeDataset(Dataset):
         dataset['cam_view_pose'] = dataset['pose']
         dataset['cam_view_trans'] = dataset['trans']
 
-        dataset['pose'] = dataset['slv_mosh_theta']
-        dataset['trans'] = dataset['slv_trans']
+        # 'pose' data will be the dataset output (after processing). This flag 
+        # chooses whether we use camera view or sideline view. 
+        if self.sideline_view:
+            dataset['pose'] = dataset['slv_mosh_theta']
+            dataset['trans'] = dataset['slv_trans']
+        else: 
+            pass # already assigned to pose and trans
 
         dataset = self.subsample(dataset, subsample)
 
@@ -400,6 +428,7 @@ class VibeDataset(Dataset):
         return dataset
 
     def load_db_3dpw(self, split):
+        if split=='val':split='test'
         db_file = osp.join(VIBE_DB_DIR, f'3dpw_{split}_db.pt')
         db = joblib.load(db_file)
         return db
@@ -473,9 +502,7 @@ class VibeDataset(Dataset):
         # get the 6d pose vector
         data = self.db['pose_6d'][start_index:end_index + 1]   # (T,25,6)
         # make a copy if we plan to do operations that change it in place 
-        # (normalize_translation is fine for non amass_hml datasets since they always have the same start_index)
-        if (self.normalize_translation and self.dataset=='amass_hml') or self.rotation_augmentation:
-            data=torch.clone(data)
+        data=torch.clone(data)
 
         T,J,D = data.shape
         assert J==25 and D==6
@@ -530,8 +557,22 @@ class VibeDataset(Dataset):
             cv_pose_6d = self.db['cv_pose_6d'][start_index:end_index + 1]
             ret['cv_pose_6d'] = process_pose6d(cv_pose_6d)
 
+        if 'slv_pose_6d' in self.db.keys():
+            slv_pose_6d = self.db['slv_pose_6d'][start_index:end_index + 1]
+            ret['slv_pose_6d'] = process_pose6d(slv_pose_6d)
+
         if 'joints3D' in self.db.keys():
             ret['joints3D'] = self.db['joints3D'][start_index:end_index + 1]
+
+        # added for 3dpw - pose before the transformation done in 3dpw_utils.py
+        if 'pose_original' in self.db.keys(): 
+            ret['pose_original'] = self.db['pose_original'][start_index:end_index + 1]
+
+        if 'trans' in self.db.keys():
+            ret['trans'] = self.db['trans'][start_index:end_index + 1]
+        
+        if 'img_name' in self.db.keys():
+            ret['img_name'] = self.db['img_name'][start_index]
 
         return ret
 
