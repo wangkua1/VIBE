@@ -16,7 +16,7 @@
 # der Wissenschaften e.V. (MPG). acting on behalf of its Max Planck Institute
 # for Intelligent Systems. All rights reserved.
 #
-# Contact: ps-license@tuebingen.mpg.de
+# Contact: ps-license@tuebingen.mpg.de h36m_and_amass_rot6d.yml
 
 import ipdb
 import os
@@ -35,26 +35,29 @@ import os.path as osp
 from mdm.utils import rotation_conversions
 from lib.core.config import VIBE_DB_DIR
 from lib.data_utils.img_utils import split_into_chunks
-from gthmr.lib.utils.geometry import apply_rotvec_to_aa2
+# from gthmr.lib.utils.geometry import apply_rotvec_to_aa2
 
 
 class VibeDataset(Dataset):
-
     def __init__(self,
                  num_frames,
                  dataset='amass',
                  split='train',
+                 sideline_view=True,
                  restrict_subsets=None,
                  data_rep='rot6d',
                  foot_vel_threshold=0.01,
                  normalize_translation=True,
                  rotation_augmentation=False,
-                 correct_frame_of_reference=False,
                  no_motion=False,
-                 output_multiplier=1):
+                 DEBUG=False
+                 ):
         """
         Args:
             dataset (str): one of ('amass','h36m')
+            sideline_view (bool): if True, then dataset key `inp` (which dataloaders interpret as `x` data to be 
+                passed to the MDM model) will be sideline view. Otherwise camera view. Default True. The returned 
+                dictionary will have both objects as (`cam_view_pose`,) and `slv_mosh_theta`.
             restrict_subsets: a list of strings of subsets to include in the final dataset
                 If None then include all subdatasets. Valid subdataset names are:
                 ['ACCAD', 'BioMotionLab', 'CMU', 'EKUT', 'Eyes', 'HumanEva', 'KIT',
@@ -63,7 +66,9 @@ class VibeDataset(Dataset):
                 If None, then it 
             data_rep (str): one of ('rot6d', 'rot6d_p_fc')
             no_motion (bool):
+
         """
+        self.DEBUG=DEBUG
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         self.SUBSAMPLE = {
             'amass': 1,
@@ -71,20 +76,9 @@ class VibeDataset(Dataset):
             'h36m': 2,
             '3dpw': 1,
         }
-        self.ROTATE_ABOUT_X = {
-            'amass': True,
-            'amass_hml': True,
-            'h36m': False,
-            '3dpw': False,
-        }
-        # self.FOOT_VEL_THRESHOLD = {
-        #     'amass' : 0.03,
-        #     'h36m' : 0.03,
-        #     '3dpw' : 0.03,
-        # }
-
         self.dataset = dataset
         self.dataname = dataset  # mdm training code uses this
+        self.sideline_view=sideline_view
         self.num_frames = num_frames
         self.split = split
         self.data_rep = data_rep
@@ -117,16 +111,12 @@ class VibeDataset(Dataset):
             # if True, this overwrites the `vid_indices` object with a restricted version
             self.create_subset(restrict_subsets)
 
-        # Precompute the 6d articulation. Set a flags for axes to be changed.
-        if correct_frame_of_reference:
-            # self.do_rotate_about_x=correct_frame_of_reference
-            raise ValueError(
-                "arg `correct_frame_of_reference` no longer does anything")
-        self.do_rotate_about_x = self.ROTATE_ABOUT_X[self.dataset]
-        self.create_db_6d_upfront(do_rotate_about_x=self.do_rotate_about_x)
-        # for data_rep with foot contact, prepare it
-        if self.data_rep == 'rot6d_fc':
-            self.do_fc_mask = True
+        # Precompute the 6d articulation.
+        self.create_db_6d_upfront()
+        
+        # for data_rep with foot contact, prepare it 
+        if self.data_rep=='rot6d_fc':
+            self.do_fc_mask = True 
             # self.compute_fc_mask(self.FOOT_VEL_THRESHOLD[self.dataset])
             self.compute_fc_mask(foot_vel_threshold)
         else:
@@ -141,7 +131,8 @@ class VibeDataset(Dataset):
 
         print(f'  number of videos: {len(self.vid_indices)}')
 
-    def _create_6d_from_theta(self, thetas, transes, do_rotate_about_x):
+    def _create_6d_from_theta(self, thetas, transes):
+
         """
         Convert the SMPL axis-angle representation to the `pose_6d` representation. 
         Joint idx 0 is root orientation in 6d, joint idx 1-24 are the relative joint 
@@ -154,6 +145,10 @@ class VibeDataset(Dataset):
         by doing the switch in xyz coords. Here we do it by rotating the root orientation
         (axis 0) by -90deg about x-axis and then switching the y&z translation terms 
         (index -1) and multiplying z-translation by -1.
+
+        Args: 
+            thetas (np.ndarray): theta axis-angles from the smpl model
+            transes (np.ndarray): translation vector. Same first dim size as `thetas`.
         """
         print("   Dataloader: doing 6d rotations")
         dset = TensorDataset(thetas, transes)
@@ -163,8 +158,10 @@ class VibeDataset(Dataset):
                             drop_last=False)
         all_data = []
         all_foot_vels = []
-        for i, (theta, trans) in enumerate(tqdm.tqdm(loader)):
-            # first, break after 1 iteration if we have `no_motion` flag set
+        for i, (theta_, trans_) in enumerate(tqdm.tqdm(loader)):
+            theta, trans = theta_.clone(), trans_.clone()
+
+            # first, break after 1 iteration if we have `no_motion` flag sets
             if self.no_motion and i > 1:
                 break
             # like in amass dataset, concat a [1,0,0]: camera orientation (it will be)
@@ -177,41 +174,38 @@ class VibeDataset(Dataset):
             ### now get the required pose vector
             pose = theta[..., 3:75]  # (T,72)
             pose = pose.view(pose.shape[0], 24, 3)  # (T,24,3)
-
-            ## if flagged, rotate the root orientation -90deg about x
-            if do_rotate_about_x:
-                root = pose.clone()[:, [0], :]
-                root_rotated = apply_rotvec_to_aa2(
-                    torch.Tensor(np.pi / 2 * np.array([-1, 0, 0])[None]).to(
-                        pose.device).float(),
-                    root.view(-1, 3),
-                ).view(root.shape)
-                pose[..., [0], :] = root_rotated
-
-            ## convert it to 6d representation that we need for the model
+            
+            ## convert axis-angle rep to 6d rep
             pose_6d = rotation_conversions.matrix_to_rotation_6d(
                 rotation_conversions.axis_angle_to_matrix(pose))  # (T,24,6)
 
-            # get translation and add dummy values to match the 6d rep
-            trans[..., [0, 2]] -= trans[0, [0, 2]].unsqueeze(
-                0)  # center the x and z coords.
+            # get translation and add dummy values to idexes 3-5 to match the 6d dimension
             trans = torch.cat(
                 (trans, torch.zeros(
                     (trans.shape[0], 3), device=trans.device)), -1)  # (N,T,6)
             trans = trans.unsqueeze(1)  # (T,1,6)
 
-            ## if flagged, the translation also needs to change axes
-            if do_rotate_about_x:
-                trans_copy = trans.clone()
-                trans[..., 1] = trans_copy[..., 2].clone()
-                trans[..., 2] = -trans_copy[..., 1].clone()
-
             # append the translation to the joint angle
             data = torch.cat((pose_6d, trans), 1)  # (T,25,6)
+
+            # rotate the motion depending on the dataset so that all datasets are in the same orientation
+            data = self.correct_orientation(data, self.dataset)
+
+            # save 
             all_data.append(data.cpu().float())
+
         return torch.cat(all_data)
 
-    def create_db_6d_upfront(self, do_rotate_about_x=False, do_fc_mask=False):
+    def correct_orientation(self, data, dataset):
+        if dataset in ('amass','amass_hml'):
+            return rotate_about_D(data.unsqueeze(-1), -np.pi/2, 0).squeeze(-1)
+        elif dataset in('h36m','3dpw'):
+            # return data 
+            return rotate_about_D(data.unsqueeze(-1), np.pi, 0).squeeze(-1)
+        else:
+            raise ValueEror
+
+    def create_db_6d_upfront(self):
         """
         Convert the SMPL representation to the `pose_6d` representation. 
         Joint idx 0 is root orientation in 6d, joint idx 1-24 are the relative joint 
@@ -233,20 +227,31 @@ class VibeDataset(Dataset):
         transes = torch.tensor(self.db['trans']).to(self.device).float()
 
         self.db['pose_6d'] = self._create_6d_from_theta(
-            thetas, transes, do_rotate_about_x)
+            thetas, transes)
 
         # For HMR datasets, do the same for camera-view data
-        if self.dataset == 'amass':
+        if self.dataset in ('amass','amass_hml'):
             pass
         elif self.dataset == 'h36m':
+            # Have two data views of the same pose data: cam_view and slv (sideline view). One of 
+            # them will be assigned to self.db['pose'] depending on the flag `self.sideline_view`. 
+            # But we will return copies of both views in 6d format
             cv_thetas = torch.tensor(self.db['cam_view_pose']).to(
                 self.device).float()  # pose and beta
             cv_transes = torch.tensor(self.db['cam_view_trans']).to(
                 self.device).float()
             self.db['cv_pose_6d'] = self._create_6d_from_theta(
-                cv_thetas, cv_transes, do_rotate_about_x)
+                cv_thetas, cv_transes)
+            
+            slv_thetas = torch.tensor(self.db['slv_mosh_theta']).to(
+                self.device).float()  # pose and beta
+            slv_trans = torch.tensor(self.db['slv_trans']).to(
+                self.device).float()  # pose and beta
+            self.db['slv_pose_6d'] = self._create_6d_from_theta(
+                cv_thetas, cv_transes)
         else:
-            raise ValueError("Please implement this ... ")
+            pass
+            # raise ValueError("Please implement this ... ")
 
     def compute_fc_mask(self, foot_vel_threshold=0.03):
         assert hasattr(self, 'db') and (
@@ -257,7 +262,7 @@ class VibeDataset(Dataset):
             'pose_6d'
             in self.db.keys()), "must run `create_db_6d_upfront` first"
 
-        # this rot6d->xyz conversion code from the original
+        # this rot6d->xyz conversion code `from motion-diffusion-model` repo (modified)
         self.rot2xyz = Rotation2xyz(device=self.device, dataset=self.dataset)
         self.get_xyz = lambda sample: self.rot2xyz(sample,
                                                    mask=None,
@@ -380,6 +385,8 @@ class VibeDataset(Dataset):
         return db
 
     def load_db_h36m(self, split, subsample=2):
+        db_date = "20230223"
+        
         if split == 'train':
             user_list = [1, 5, 6, 7, 8]
         elif split in [
@@ -393,7 +400,7 @@ class VibeDataset(Dataset):
         for user_i in user_list:
             print(f"  Loading Subject S{user_i}")
             db_subset = joblib.load(
-                osp.join(VIBE_DB_DIR, f'h36m_{user_i}_db.pt'))
+                osp.join(VIBE_DB_DIR, f'h36m_{user_i}_{db_date}_db.pt'))
             seq_db_list.append(db_subset)
 
         dataset = defaultdict(list)
@@ -405,8 +412,13 @@ class VibeDataset(Dataset):
         dataset['cam_view_pose'] = dataset['pose']
         dataset['cam_view_trans'] = dataset['trans']
 
-        dataset['pose'] = dataset['slv_mosh_theta']
-        dataset['trans'] = dataset['slv_trans']
+        # 'pose' data will be the dataset output (after processing). This flag 
+        # chooses whether we use camera view or sideline view. 
+        if self.sideline_view:
+            dataset['pose'] = dataset['slv_mosh_theta']
+            dataset['trans'] = dataset['slv_trans']
+        else: 
+            pass # already assigned to pose and trans
 
         dataset = self.subsample(dataset, subsample)
 
@@ -418,6 +430,7 @@ class VibeDataset(Dataset):
         return dataset
 
     def load_db_3dpw(self, split):
+        if split=='val':split='test'
         db_file = osp.join(VIBE_DB_DIR, f'3dpw_{split}_db.pt')
         db = joblib.load(db_file)
         return db
@@ -483,26 +496,25 @@ class VibeDataset(Dataset):
             # handle the case that the motion is not long enough - we will extend it later
             if end_index_max - start_index < self.num_frames:
                 end_index = end_index_max
-                pass
             else:
-                # this is the stnadard case where motion is long enough
-                start_index = random.randint(start_index,
-                                             end_index_max - self.num_frames)
-                end_index = start_index + self.num_frames - 1
+                # this is the standard case where motion is long enough
+                start_index=random.randint(start_index, end_index_max-self.num_frames)
+                end_index=start_index+self.num_frames-1
+
+        # get the 6d pose vector
+        data = self.db['pose_6d'][start_index:end_index + 1]   # (T,25,6)
+        # make a copy if we plan to do operations that change it in place 
+        data=torch.clone(data)
+
+        T,J,D = data.shape
+        assert J==25 and D==6
 
         # get vidname
         vid_name = self.db['vid_name'][start_index]
 
-        # get the 6d pose vector, and duplicate the last frame if it's too short
-        data = self.db['pose_6d'][start_index:end_index + 1]
-        T, J, D = data.shape
-        assert J == 25 and D == 6
-
-        # rotation augmentation about y (vertical) axis
-        # Done here so the same rotation is applied to both pose and cv_pose.
         if self.rotation_augmentation:
-            rand_root_rot = random.uniform(0, 2 * np.pi)
-
+            rand_root_rot = random.uniform(0, 2 * np.pi) 
+        
         def process_pose6d(pose6d):
             """
             This helper function was written because the same processing needs to be applied to both "pose" and "cv_pose".
@@ -547,14 +559,28 @@ class VibeDataset(Dataset):
             cv_pose_6d = self.db['cv_pose_6d'][start_index:end_index + 1]
             ret['cv_pose_6d'] = process_pose6d(cv_pose_6d)
 
+        if 'slv_pose_6d' in self.db.keys():
+            slv_pose_6d = self.db['slv_pose_6d'][start_index:end_index + 1]
+            ret['slv_pose_6d'] = process_pose6d(slv_pose_6d)
+
         if 'joints3D' in self.db.keys():
             ret['joints3D'] = self.db['joints3D'][start_index:end_index + 1]
 
+        # added for 3dpw - pose before the transformation done in 3dpw_utils.py
+        if 'pose_original' in self.db.keys(): 
+            ret['pose_original'] = self.db['pose_original'][start_index:end_index + 1]
+
+        if 'trans' in self.db.keys():
+            ret['trans'] = self.db['trans'][start_index:end_index + 1]
+        
+        if 'img_name' in self.db.keys():
+            ret['img_name'] = self.db['img_name'][start_index]
+
         return ret
 
-
-def apply_rotvec_to_aa2(rotvec, aa):
+def apply_rotvec_to_aa1(rotvec, aa):
     """
+    Version 1: rotate `aa` by `rotvec` in the *aa frame**.
     Args:
         rotvec: shape (1,3) 
         aa: shape (...,3) set of orientations in axis-angle orientation.
@@ -563,6 +589,17 @@ def apply_rotvec_to_aa2(rotvec, aa):
     rotvec = rotvec.repeat(N, 1)
     return roma.rotvec_composition([rotvec, aa])
 
+def apply_rotvec_to_aa2(rotvec, aa):
+    """
+    Version 2: rotate `aa` by `rotvec` in the *world frame*.
+
+    Args:
+        rotvec: shape (1,3) 
+        aa: shape (...,3) set of orientations in axis-angle orientation.
+    """
+    N = aa.shape[0]
+    rotvec = rotvec.repeat(N, 1)
+    return roma.rotvec_composition([rotvec, aa])
 
 def rotate_points(origin, point, angle):
     """
@@ -576,38 +613,78 @@ def rotate_points(origin, point, angle):
     qy = np.sin(angle) * (px) + np.cos(angle) * (py)
     return torch.stack((qx, qy), -1)
 
+def rotate_about_D(motions, theta, D=1):
+    """ 
+    For a batch of motions in rot6d format (N,25,6,T), rotate the whole
+    motion about the X-axis (D=0), or Y-axis (D=1), or Z axis (D=2).
+    The rotation is about the origin.
+
+    Args:
+        motions (torch.Tensor): shape (N,25,6,T). Note that each dimension in N*T
+            is rotated independently, so it doesn't matter if this isn't a coherent 
+            sequence. E.g. if you have a batch (N,25,6), then just unsqueeze(-1) to 
+            add a dummy dim. 
+        D: the dimension, XYZ, we are rotating about, e.g. D=1 is Y-axis.
+    """
+    assert motions.shape[1:3]==(25,6)
+    motions_rotated = motions
+    # motions_rotated = motions.unsqueeze(0)
+
+    # rotate the root
+    root = motions_rotated[:,[0]].permute(0,3,1,2)
+    root = rotation_conversions.matrix_to_axis_angle(
+                    rotation_conversions.rotation_6d_to_matrix(root))
+    shape = root.shape
+    # create the rotvec tensor and assign the rotation to axis D
+    rotvec = torch.Tensor(np.array([0, 0, 0])[None]).to(root.device).float()
+    rotvec[0,D] = theta
+    root_rotated = apply_rotvec_to_aa2(rotvec, root.reshape(-1,3)).view(*shape)
+    root_rotated = rotation_conversions.matrix_to_rotation_6d(
+                    rotation_conversions.axis_angle_to_matrix(root_rotated))
+    root_rotated = root_rotated.permute(0,2,3,1)    
+
+    # rotate the translation points
+    trans_axes = [0,1,2]
+    trans_axes.remove(D)  # axis dimensinos for not-D that need to have translation rotated
+    trans = motions_rotated[:,[-1],trans_axes].permute(0,2,1) # (N,T,2)
+    shape = trans.shape
+    # assert  trans[:,0].sum().item()==0, "rotation augmentation only allowed when also doing translation normalization"
+    trans_rotated = rotate_points(np.array([0,0]), trans.reshape(-1,2), theta).reshape(shape)
+    trans_rotated = trans_rotated.permute(0,2,1)
+
+    # # assign the new values
+    motions_rotated[:,[0]] = root_rotated
+    motions_rotated[:,[-1],trans_axes] = trans_rotated
+
+    return motions_rotated
 
 def rotate_about_y(motions, theta):
     """ 
     For a motion in rot6d format (N,25,6,T), rotate the whole
     motion about the y (vertical) axes and about the origin.
     """
-    assert motions.shape[:2] == (25, 6)
+    assert motions.shape[:2]==(25,6)
     motions_rotated = motions.unsqueeze(0)
     # rotate the root
-    root = motions_rotated[:, [0]].permute(0, 3, 1, 2)
+    root = motions_rotated[:,[0]].permute(0,3,1,2)
     root = rotation_conversions.matrix_to_axis_angle(
-        rotation_conversions.rotation_6d_to_matrix(root))
+                    rotation_conversions.rotation_6d_to_matrix(root))
     shape = root.shape
-    rotvec = torch.Tensor(theta * np.array([0, -1, 0])[None]).to(
-        root.device).float()
-    root_rotated = apply_rotvec_to_aa2(rotvec, root.reshape(-1,
-                                                            3)).view(*shape)
+    rotvec = torch.Tensor(theta*np.array([0, -1, 0])[None]).to(root.device).float()
+    root_rotated = apply_rotvec_to_aa2(rotvec, root.reshape(-1,3)).view(*shape)
     root_rotated = rotation_conversions.matrix_to_rotation_6d(
-        rotation_conversions.axis_angle_to_matrix(root_rotated))
-    root_rotated = root_rotated.permute(0, 2, 3, 1)
+                    rotation_conversions.axis_angle_to_matrix(root_rotated))
+    root_rotated = root_rotated.permute(0,2,3,1)    
 
     # rotate the translation points
-    trans = motions_rotated[:, [-1], [0, 2]].permute(0, 2, 1)  # (N,T,2)
+    trans = motions_rotated[:,[-1],[0,2]].permute(0,2,1) # (N,T,2)
     shape = trans.shape
-    assert trans[:, 0].sum().item(
-    ) == 0, "rotation augmentation only allowed when also doing translation normalization"
-    trans_rotated = rotate_points(np.array([0, 0]), trans.reshape(-1, 2),
-                                  theta).reshape(shape)
-    trans_rotated = trans_rotated.permute(0, 2, 1)
+    assert  trans[:,0].sum().item()==0, "rotation augmentation only allowed when also doing translation normalization"
+    trans_rotated = rotate_points(np.array([0,0]), trans.reshape(-1,2), theta).reshape(shape)
+    trans_rotated = trans_rotated.permute(0,2,1)
 
     # # assign the new values
-    motions_rotated[:, [0]] = root_rotated
-    motions_rotated[:, [-1], [0, 2]] = trans_rotated
+    motions_rotated[:,[0]] = root_rotated
+    motions_rotated[:,[-1],[0,2]] = trans_rotated
 
     return motions_rotated[0]
