@@ -385,6 +385,8 @@ class VibeDataset(Dataset):
         return db
 
     def load_db_h36m(self, split, subsample=2):
+        db_date = "20230223"
+        
         if split == 'train':
             user_list = [1, 5, 6, 7, 8]
         elif split in [
@@ -398,7 +400,7 @@ class VibeDataset(Dataset):
         for user_i in user_list:
             print(f"  Loading Subject S{user_i}")
             db_subset = joblib.load(
-                osp.join(VIBE_DB_DIR, f'h36m_{user_i}_db.pt'))
+                osp.join(VIBE_DB_DIR, f'h36m_{user_i}_{db_date}_db.pt'))
             seq_db_list.append(db_subset)
 
         dataset = defaultdict(list)
