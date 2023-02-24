@@ -1187,12 +1187,18 @@ def replace_trans(user_i, out_dir, prev_cache_dir):
 def read_db(split, user_i=0, out_dir=None, use_cache_only=False):
     dataset_path = H36M_DIR
 
+    break_one = False
+
     if split == 'train':
         user_list = [1, 5, 6, 7, 8]
     elif split == 'val':
         user_list = [9, 11]
     else:
         user_list = [user_i]
+
+    if user_i == 12: # dummy user
+        user_list = [1]
+        break_one = True
 
     seq_db_list = []
 
@@ -1243,6 +1249,9 @@ def read_db(split, user_i=0, out_dir=None, use_cache_only=False):
 
             if seq_db is not None:
                 seq_db_list.append(seq_db)
+
+            if break_one:
+                break
 
     dataset = defaultdict(list)
     for seq_db in seq_db_list:

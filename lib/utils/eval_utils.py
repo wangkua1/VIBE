@@ -4,6 +4,7 @@
 import torch
 import numpy as np
 from nemo.utils.misc_utils import to_np, to_tensor
+from nemo.utils.pose_utils import rigid_transform_3D, apply_rigid_transform
 
 def compute_accel(joints):
     """
@@ -290,22 +291,47 @@ def compute_errors(gt3ds, preds):
     return errors, errors_pa
 
 def compute_mpjpe(pred_j3ds, target_j3ds):
-        pred_j3ds = to_tensor(pred_j3ds)
-        target_j3ds = to_tensor(target_j3ds)
+    pred_j3ds = to_tensor(pred_j3ds)
+    target_j3ds = to_tensor(target_j3ds)
 
-        print(f'Evaluating on {pred_j3ds.shape[0]} number of poses...')
-        pred_pelvis = (pred_j3ds[:, [2], :] + pred_j3ds[:, [3], :]) / 2.0
-        target_pelvis = (target_j3ds[:, [2], :] + target_j3ds[:, [3], :]) / 2.0
+    print(f'Evaluating on {pred_j3ds.shape[0]} number of poses...')
+    pred_pelvis = (pred_j3ds[:, [2], :] + pred_j3ds[:, [3], :]) / 2.0
+    target_pelvis = (target_j3ds[:, [2], :] + target_j3ds[:, [3], :]) / 2.0
 
-        pred_j3ds -= pred_pelvis
-        target_j3ds -= target_pelvis
-        # Absolute error (MPJPE)
-        errors = torch.sqrt(
-            ((pred_j3ds -
-              target_j3ds)**2).sum(dim=-1)).mean(dim=-1).cpu().numpy()
-        S1_hat = batch_compute_similarity_transform_torch(
-            pred_j3ds, target_j3ds)
-        errors_pa = torch.sqrt(
-            ((S1_hat -
-              target_j3ds)**2).sum(dim=-1)).mean(dim=-1).cpu().numpy()
-        return errors, errors_pa
+    pred_j3ds -= pred_pelvis
+    target_j3ds -= target_pelvis
+    # Absolute error (MPJPE)
+    errors = torch.sqrt(
+        ((pred_j3ds -
+          target_j3ds)**2).sum(dim=-1)).mean(dim=-1).cpu().numpy()
+    S1_hat = batch_compute_similarity_transform_torch(
+        pred_j3ds, target_j3ds)
+    errors_pa = torch.sqrt(
+        ((S1_hat -
+          target_j3ds)**2).sum(dim=-1)).mean(dim=-1).cpu().numpy()
+    return errors, errors_pa
+
+
+def compute_g_mpjpe(g_pred_j3ds, g_target_j3ds):
+    """
+    Input:
+        g_pred_j3ds -- (N, T, J, 3)
+        g_target_j3ds -- (N, T, J, 3)
+    """
+    # g_pred_j3ds = to_tensor(g_pred_j3ds)
+    # g_target_j3ds = to_tensor(g_target_j3ds)
+
+    print(f'Evaluating on {g_pred_j3ds.shape[0]} number of sequences...')
+
+    def g_mpjpe_per_sequence(g_pred, g_target):
+        R, t = rigid_transform_3D(g_pred.reshape(-1, 3), g_target.reshape(-1, 3))
+        g_pred_transformed = apply_rigid_transform(g_pred, R, t)
+        return ((g_pred_transformed - g_target)**2).sum(-1).mean()
+
+    N = len(g_pred_j3ds)
+    errors = np.zeros((N,))
+    for i in range(N):
+        g_pred = g_pred_j3ds[i]
+        g_target = g_target_j3ds[i]
+        errors[i] = g_mpjpe_per_sequence(g_pred, g_target)
+    return errors

@@ -394,7 +394,7 @@ class VibeDataset(Dataset):
         ]:  # JB added test for compatibility with mdm.sample.generate
             user_list = [9, 11]
         else:
-            user_list = [1]
+            user_list = [12]
 
         seq_db_list = []
         for user_i in user_list:
@@ -575,6 +575,18 @@ class VibeDataset(Dataset):
         
         if 'img_name' in self.db.keys():
             ret['img_name'] = self.db['img_name'][start_index]
+
+        if 'joints2D' in self.db.keys():
+            ret['kp_2d'] = self.db['joints2D'][start_index:end_index + 1]
+
+        if 'shape' in self.db.keys():
+            # Prepare 'theta'
+            pose = np.array(self.db['pose'][start_index:end_index + 1])
+            shape = np.array(self.db['shape'][start_index:end_index + 1])
+            N = len(pose)
+            dummy_cam = np.zeros((N, 3))
+            theta = np.concatenate([dummy_cam, pose, shape], 1)
+            ret['theta'] = theta
 
         return ret
 
