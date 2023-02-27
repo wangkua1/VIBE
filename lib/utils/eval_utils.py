@@ -326,7 +326,7 @@ def compute_g_mpjpe(g_pred_j3ds, g_target_j3ds):
     def g_mpjpe_per_sequence(g_pred, g_target):
         R, t = rigid_transform_3D(g_pred.reshape(-1, 3), g_target.reshape(-1, 3))
         g_pred_transformed = apply_rigid_transform(g_pred, R, t)
-        return ((g_pred_transformed - g_target)**2).sum(-1).mean()
+        return np.sqrt(((g_pred_transformed - g_target)**2).sum(-1)).mean()
 
     N = len(g_pred_j3ds)
     errors = np.zeros((N,))

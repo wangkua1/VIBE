@@ -43,7 +43,7 @@ class VibeDataset(Dataset):
                  num_frames,
                  dataset='amass',
                  split='train',
-                 sideline_view=True,
+                 sideline_view=False,
                  restrict_subsets=None,
                  data_rep='rot6d',
                  foot_vel_threshold=0.01,
@@ -66,7 +66,6 @@ class VibeDataset(Dataset):
                 If None, then it 
             data_rep (str): one of ('rot6d', 'rot6d_p_fc')
             no_motion (bool):
-
         """
         self.DEBUG=DEBUG
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -243,12 +242,13 @@ class VibeDataset(Dataset):
             self.db['cv_pose_6d'] = self._create_6d_from_theta(
                 cv_thetas, cv_transes)
             
-            slv_thetas = torch.tensor(self.db['slv_mosh_theta']).to(
-                self.device).float()  # pose and beta
-            slv_trans = torch.tensor(self.db['slv_trans']).to(
-                self.device).float()  # pose and beta
-            self.db['slv_pose_6d'] = self._create_6d_from_theta(
-                cv_thetas, cv_transes)
+            if self.sideline_view:
+                slv_thetas = torch.tensor(self.db['slv_mosh_theta']).to(
+                    self.device).float()  # pose and beta
+                slv_trans = torch.tensor(self.db['slv_trans']).to(
+                    self.device).float()  # pose and beta
+                self.db['slv_pose_6d'] = self._create_6d_from_theta(
+                    cv_thetas, cv_transes)
         else:
             pass
             # raise ValueError("Please implement this ... ")
