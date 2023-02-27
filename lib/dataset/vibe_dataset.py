@@ -30,6 +30,7 @@ import tqdm
 from collections import defaultdict
 from torch.utils.data import Dataset
 from mdm.model.rotation2xyz import Rotation2xyz
+from gthmr.lib.models.emp import rotate_motion_by_rotmat
 
 import os.path as osp
 from mdm.utils import rotation_conversions
@@ -66,6 +67,7 @@ class VibeDataset(Dataset):
                 If None, then it 
             data_rep (str): one of ('rot6d', 'rot6d_p_fc')
             no_motion (bool):
+            motion_augmentation: either None or structure {'x':[-0.2*np.pi]}
         """
         self.DEBUG=DEBUG
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -512,9 +514,6 @@ class VibeDataset(Dataset):
         # get vidname
         vid_name = self.db['vid_name'][start_index]
 
-        if self.rotation_augmentation:
-            rand_root_rot = random.uniform(0, 2 * np.pi) 
-        
         def process_pose6d(pose6d):
             """
             This helper function was written because the same processing needs to be applied to both "pose" and "cv_pose".
@@ -526,7 +525,7 @@ class VibeDataset(Dataset):
 
             # rotation augmentation about y (vertical) axis
             if self.rotation_augmentation:
-                pose6d = rotate_about_y(pose6d, rand_root_rot)
+                pose6d = random_augmentation(pose6d)
 
             if self.data_rep == "rot6d_fc":
                 fc_mask = self.db['fc_mask'][start_index:end_index +
@@ -624,6 +623,21 @@ def rotate_points(origin, point, angle):
     qx = np.cos(angle) * (px) - np.sin(angle) * (py)
     qy = np.sin(angle) * (px) + np.cos(angle) * (py)
     return torch.stack((qx, qy), -1)
+
+def random_augmentation(motion):
+    """ 
+    in: motion shape (26,5,T)
+    out: motion shape (26,5,T)
+    """
+    angles = torch.rand(1,3)
+    xmin, xmax = -1/4*torch.pi, 1/4*torch.pi
+    ymin, ymax = -torch.pi, torch.pi
+    angles[0,0] = angles[0,0]*(xmax-xmin)-xmax
+    angles[0,1] = angles[0,1]*(ymax-ymin)-ymax
+    angles[0,2] = 0
+    angles_rotmat = rotation_conversions.euler_angles_to_matrix(angles, convention='XYZ')
+    motion_rotated = rotate_motion_by_rotmat(motion.unsqueeze(0), angles_rotmat)[0]
+    return motion_rotated
 
 def rotate_about_D(motions, theta, D=1):
     """ 
