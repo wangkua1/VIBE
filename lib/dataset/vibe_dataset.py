@@ -574,7 +574,7 @@ class VibeDataset(Dataset):
             ret['trans'] = self.db['trans'][start_index:end_index + 1]
         
         if 'img_name' in self.db.keys():
-            ret['img_name'] = self.db['img_name'][start_index]
+            ret['img_name'] = self.db['img_name'][start_index:end_index + 1]
 
         if 'joints2D' in self.db.keys():
             ret['kp_2d'] = self.db['joints2D'][start_index:end_index + 1]
