@@ -50,6 +50,7 @@ class VibeDataset(Dataset):
                  foot_vel_threshold=0.01,
                  normalize_translation=True,
                  rotation_augmentation=False,
+                 augment_camview=False,
                  no_motion=False,
                  DEBUG=False
                  ):
@@ -87,6 +88,7 @@ class VibeDataset(Dataset):
         self.seqlen = num_frames
         self.normalize_translation = normalize_translation
         self.rotation_augmentation = rotation_augmentation
+        self.augment_camview=augment_camview
         self.foot_vel_threshold = foot_vel_threshold  # for foot contact mask if it's used
 
         self.stride = self.seqlen
@@ -524,8 +526,8 @@ class VibeDataset(Dataset):
                 pose6d[-1, :, :] = pose6d[-1, :, :] - pose6d[-1, :, [0]]
 
             # rotation augmentation about y (vertical) axis
-            if self.rotation_augmentation:
-                pose6d = random_augmentation(pose6d)
+            if self.augment_camview:
+                pose6d = augment_world_to_camera(pose6d.unsqueeze(0))[0] # expects (N,J,D,T)
 
             if self.data_rep == "rot6d_fc":
                 fc_mask = self.db['fc_mask'][start_index:end_index +
@@ -624,20 +626,49 @@ def rotate_points(origin, point, angle):
     qy = np.sin(angle) * (px) + np.cos(angle) * (py)
     return torch.stack((qx, qy), -1)
 
-def random_augmentation(motion):
-    """ 
-    in: motion shape (26,5,T)
-    out: motion shape (26,5,T)
+def augment_world_to_camera(motions, yrange=(-torch.pi, torch.pi), xrange=(-0.05, 0.3)):
     """
-    angles = torch.rand(1,3)
-    xmin, xmax = -1/4*torch.pi, 1/4*torch.pi
-    ymin, ymax = -torch.pi, torch.pi
-    angles[0,0] = angles[0,0]*(xmax-xmin)-xmax
-    angles[0,1] = angles[0,1]*(ymax-ymin)-ymax
-    angles[0,2] = 0
-    angles_rotmat = rotation_conversions.euler_angles_to_matrix(angles, convention='XYZ')
-    motion_rotated = rotate_motion_by_rotmat(motion.unsqueeze(0), angles_rotmat)[0]
-    return motion_rotated
+    For data in a flat world frame (i.e. gravity aligns with y-axis, like in mocap datasets), 
+    apply random augmentations to put it in some camera frame. 
+
+    First rotate randomly about `y` (the normal to the ground). This is bc 
+    mocap datasets often have the people facing the same direction. 
+
+    Next rotate about `x` for a small range. This simulates the camera 
+    looking slightly up or down. 
+
+    The rotations are uniformly sampled from the given xrange and yrange.
+
+    In: (N,25,6,T)  rot6d. 
+    Out: (N,25,6,T)
+    """
+    def sample_uniform(vmin, vmax, n_samples):
+        return torch.rand(n_samples)*(vmax-vmin) + vmin
+    N,J,D,T  = motions.shape
+    assert J==25 and D==6
+    
+    # sample the angles
+    y_angles = sample_uniform(*yrange, N)
+    x_angles = sample_uniform(*xrange, N)
+    
+    # make y rotation matrix
+    y_euler_angles = torch.zeros(N,3)
+    y_euler_angles[:,1] = y_angles
+    y_rotmat = rotation_conversions.euler_angles_to_matrix(y_euler_angles, convention='XYZ')
+    
+    # make x rotation matrix
+    x_euler_angles = torch.zeros(N,3)
+    x_euler_angles[:,0] = x_angles
+    x_rotmat = rotation_conversions.euler_angles_to_matrix(x_euler_angles, convention='XYZ')
+    
+    # compose - order is important
+    rotmat = roma.rotmat_composition([x_rotmat, y_rotmat]) 
+
+    # apply to the motion
+    motions_aug = rotate_motion_by_rotmat(motions, rotmat)
+    
+    return motions_aug
+
 
 def rotate_about_D(motions, theta, D=1):
     """ 
