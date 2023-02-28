@@ -126,12 +126,12 @@ def get_mpii3d_joint_names():
 
 def get_insta_joint_names():
     return [
-        'OP RHeel',
-        'OP RKnee',
-        'OP RHip',
-        'OP LHip',
-        'OP LKnee',
-        'OP LHeel',
+        'OP RHeel', # 0
+        'OP RKnee', # 1
+        'OP RHip',  # 2
+        'OP LHip',  # 3
+        'OP LKnee', # 4
+        'OP LHeel', # 5
         'OP RWrist',
         'OP RElbow',
         'OP RShoulder',

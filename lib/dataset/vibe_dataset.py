@@ -38,6 +38,7 @@ from lib.core.config import VIBE_DB_DIR
 from lib.data_utils.img_utils import split_into_chunks
 # from gthmr.lib.utils.geometry import apply_rotvec_to_aa2
 
+ALL_VIBE_DBS = ['amass', 'amass_hml', '3dpw', 'h36m', 'nemomocap']
 
 class VibeDataset(Dataset):
     def __init__(self,
@@ -76,6 +77,7 @@ class VibeDataset(Dataset):
             'amass_hml': 1,
             'h36m': 2,
             '3dpw': 1,
+            'nemomocap': 1
         }
         self.dataset = dataset
         self.dataname = dataset  # mdm training code uses this
@@ -200,7 +202,7 @@ class VibeDataset(Dataset):
     def correct_orientation(self, data, dataset):
         if dataset in ('amass','amass_hml'):
             return rotate_about_D(data.unsqueeze(-1), -np.pi/2, 0).squeeze(-1)
-        elif dataset in('h36m','3dpw'):
+        elif dataset in('h36m','3dpw', 'nemomocap'):
             # return data 
             return rotate_about_D(data.unsqueeze(-1), np.pi, 0).squeeze(-1)
         else:
@@ -370,6 +372,8 @@ class VibeDataset(Dataset):
             db = self.load_db_h36m(split, subsample=subsample)
         elif self.dataset == '3dpw':
             db = self.load_db_3dpw(split)
+        elif self.dataset == 'nemomocap':
+            db = self.load_db_nemomocap(split)
         else:
             valid_datasets = ['amass', 'h36m', '3dpw']
             raise ValueEror(
@@ -435,6 +439,12 @@ class VibeDataset(Dataset):
         if split=='val':split='test'
         db_file = osp.join(VIBE_DB_DIR, f'3dpw_{split}_db.pt')
         db = joblib.load(db_file)
+        return db
+
+    def load_db_nemomocap(self, split):
+        db_file = osp.join(VIBE_DB_DIR, f'nemomocap_{split}_20230228_db.pt')
+        db = joblib.load(db_file)
+        db['trans'] = db['trans'].squeeze(1)
         return db
 
     def subsample(self, db, subsample=1):

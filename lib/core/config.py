@@ -31,6 +31,8 @@ PENNACTION_DIR = osp.join(ROOT, 'data/penn_action')
 POSETRACK_DIR = osp.join(ROOT, 'data/posetrack')
 H36M_DIR = osp.join(ROOT, 'data/h36m')
 VIBE_DATA_DIR = osp.join(ROOT, 'data/vibe_data')
+NEMO_DB_DIR = "/home/groups/syyeung/wangkua1/nemo/exps"
+
 
 # Configuration variables
 cfg = CN()
