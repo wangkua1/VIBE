@@ -377,7 +377,7 @@ class VibeDataset(Dataset):
             raise ValueEror(
                 f"Invalid dataset [{self.dataset}]. Must be one of {valid_datasets}"
             )
-
+        print(f'Loaded [{self.dataset}] split [{split}]')
         return db
 
     def load_db_amass(self, split):
@@ -390,47 +390,51 @@ class VibeDataset(Dataset):
 
     def load_db_h36m(self, split, subsample=2):
         db_date = "20230223"
-        
-        if split == 'train':
-            user_list = [1, 5, 6, 7, 8]
-        elif split in [
-                'val', 'test'
-        ]:  # JB added test for compatibility with mdm.sample.generate
-            user_list = [9, 11]
+        fname = os.path.join(VIBE_DB_DIR, f"h36m_{split}_{db_date}.pt")
+        print(fname)
+
+        if os.path.exists(fname):
+            dataset = joblib.load(fname)
         else:
-            user_list = [12]
+            if split == 'train':
+                user_list = [1, 5, 6, 7, 8]
+            elif split in [
+                    'val', 'test'
+            ]:  # JB added test for compatibility with mdm.sample.generate
+                user_list = [9, 11]
+            else:
+                user_list = [12]
 
-        seq_db_list = []
-        for user_i in user_list:
-            print(f"  Loading Subject S{user_i}")
-            db_subset = joblib.load(
-                osp.join(VIBE_DB_DIR, f'h36m_{user_i}_{db_date}_db.pt'))
-            seq_db_list.append(db_subset)
+            seq_db_list = []
+            for user_i in user_list:
+                print(f"  Loading Subject S{user_i}")
+                db_subset = joblib.load(
+                    osp.join(VIBE_DB_DIR, f'h36m_{user_i}_{db_date}_db.pt'))
+                seq_db_list.append(db_subset)
 
-        dataset = defaultdict(list)
+            dataset = defaultdict(list)
 
-        for seq_db in seq_db_list:
-            for k, v in seq_db.items():
-                dataset[k] += list(v)
-                
-        dataset['cam_view_pose'] = dataset['pose']
-        dataset['cam_view_trans'] = dataset['trans']
+            for seq_db in seq_db_list:
+                for k, v in seq_db.items():
+                    dataset[k] += list(v)
+                    
+            dataset['cam_view_pose'] = dataset['pose']
+            dataset['cam_view_trans'] = dataset['trans']
 
-        # 'pose' data will be the dataset output (after processing). This flag 
-        # chooses whether we use camera view or sideline view. 
-        if self.sideline_view:
-            dataset['pose'] = dataset['slv_mosh_theta']
-            dataset['trans'] = dataset['slv_trans']
-        else: 
-            pass # already assigned to pose and trans
+            # 'pose' data will be the dataset output (after processing). This flag 
+            # chooses whether we use camera view or sideline view. 
+            if self.sideline_view:
+                dataset['pose'] = dataset['slv_mosh_theta']
+                dataset['trans'] = dataset['slv_trans']
+            else: 
+                pass # already assigned to pose and trans
+            dataset = self.subsample(dataset, subsample)
 
-        dataset = self.subsample(dataset, subsample)
+            for k in dataset.keys():
+                dataset[k] = np.array(dataset[k])
+            
+            joblib.dump(dataset, fname)
 
-        # convert to array
-        # for k in dataset.keys():
-        #     dataset[k] = np.array(dataset[k])
-
-        print(f'Loaded h36m split [{split}]')
         return dataset
 
     def load_db_3dpw(self, split):
