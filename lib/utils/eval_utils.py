@@ -5,7 +5,9 @@ import torch
 import numpy as np
 from nemo.utils.misc_utils import to_np, to_tensor
 from nemo.utils.pose_utils import rigid_transform_3D, apply_rigid_transform
-
+from lib.models.smpl import SMPL_MODEL_DIR
+from lib.models.smpl import SMPL
+    
 def compute_accel(joints):
     """
     Computes acceleration of 3D joints.
@@ -50,6 +52,26 @@ def compute_error_accel(joints_gt, joints_pred, vis=None):
 
     return np.mean(normed[new_vis], axis=1)
 
+def theta_to_verts(target_theta):
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    smpl = SMPL(
+        SMPL_MODEL_DIR,
+        batch_size=1, # target_theta.shape[0],
+    ).to(device)
+
+    betas = torch.from_numpy(target_theta[:,75:]).to(device)
+    pose = torch.from_numpy(target_theta[:,3:75]).to(device)
+
+    target_verts = []
+    b_ = torch.split(betas, 5000)
+    p_ = torch.split(pose, 5000)
+
+    for b,p in zip(b_,p_):
+        output = smpl(betas=b, body_pose=p[:, 3:], global_orient=p[:, :3], pose2rot=True)
+        target_verts.append(output.vertices.detach().cpu().numpy())
+
+    target_verts = np.concatenate(target_verts, axis=0)
+    return target_verts
 
 def compute_error_verts(pred_verts, target_verts=None, target_theta=None):
     """
@@ -62,26 +84,7 @@ def compute_error_verts(pred_verts, target_verts=None, target_theta=None):
     """
 
     if target_verts is None:
-        from lib.models.smpl import SMPL_MODEL_DIR
-        from lib.models.smpl import SMPL
-        device = 'cpu'
-        smpl = SMPL(
-            SMPL_MODEL_DIR,
-            batch_size=1, # target_theta.shape[0],
-        ).to(device)
-
-        betas = torch.from_numpy(target_theta[:,75:]).to(device)
-        pose = torch.from_numpy(target_theta[:,3:75]).to(device)
-
-        target_verts = []
-        b_ = torch.split(betas, 5000)
-        p_ = torch.split(pose, 5000)
-
-        for b,p in zip(b_,p_):
-            output = smpl(betas=b, body_pose=p[:, 3:], global_orient=p[:, :3], pose2rot=True)
-            target_verts.append(output.vertices.detach().cpu().numpy())
-
-        target_verts = np.concatenate(target_verts, axis=0)
+        target_verts = theta_to_verts(target_theta)
 
     assert len(pred_verts) == len(target_verts)
     error_per_vert = np.sqrt(np.sum((target_verts - pred_verts) ** 2, axis=2))
