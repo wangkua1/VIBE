@@ -31,7 +31,7 @@ from collections import defaultdict
 from torch.utils.data import Dataset
 from mdm.model.rotation2xyz import Rotation2xyz
 from gthmr.lib.models.emp import rotate_motion_by_rotmat
-
+# 
 import os.path as osp
 from mdm.utils import rotation_conversions
 from lib.core.config import VIBE_DB_DIR
@@ -122,10 +122,10 @@ class VibeDataset(Dataset):
 
         # Precompute the 6d articulation.
         self.create_db_6d_upfront()
-
-        # for data_rep with foot contact, prepare it
-        if self.data_rep == 'rot6d_fc':
-            self.do_fc_mask = True
+        
+        # for data_rep with foot contact, prepare it 
+        if self.data_rep in ('rot6d_fc','rot6d_fc_shape'):
+            self.do_fc_mask = True 
             # self.compute_fc_mask(self.FOOT_VEL_THRESHOLD[self.dataset])
             self.compute_fc_mask(foot_vel_threshold)
         else:
@@ -540,7 +540,8 @@ class VibeDataset(Dataset):
 
         def process_pose6d(pose6d):
             """
-            This helper function was written because the same processing needs to be applied to both "pose" and "cv_pose".
+            This helper function was written because the same processing needs 
+            to be applied to both "pose" and "cv_pose".
             """
             pose6d = pose6d.permute(1, 2, 0)  # (25,6,T)
             if self.normalize_translation:
@@ -552,6 +553,7 @@ class VibeDataset(Dataset):
                 pose6d = augment_world_to_camera(
                     pose6d.unsqueeze(0))[0]  # expects (N,J,D,T)
 
+            # for non-rot6d datatypes, append the extra stuff
             if self.data_rep == "rot6d_fc":
                 fc_mask = self.db['fc_mask'][start_index:end_index +
                                              1]  # (T,4)
@@ -559,6 +561,15 @@ class VibeDataset(Dataset):
                 pose6d = torch.cat((pose6d.view(T, J * D), fc_mask),
                                    1).unsqueeze(2).permute(1, 2,
                                                            0)  # (154,1,T)
+            elif self.data_rep == "rot6d_fc_shape":
+                fc_mask = self.db['fc_mask'][start_index:end_index + 1]  # (T,4)
+                shape = torch.from_numpy(self.db['shape'][start_index:end_index + 1]) # (T,10)
+
+                pose6d = pose6d.permute(2, 0, 1)  # (T,25,6)
+                pose6d = torch.cat((pose6d.view(T, J * D), fc_mask, shape),
+                                   1).unsqueeze(2).permute(1, 2,
+                                                           0)  # (164,1,T)
+
             # if the data is smaller than self.num_frames, pad it with the last frame value
             if pose6d.shape[-1] < self.num_frames:
                 n_addframes = self.num_frames - pose6d.shape[-1]
@@ -791,3 +802,4 @@ def rotate_about_y(motions, theta):
     motions_rotated[:, [-1], [0, 2]] = trans_rotated
 
     return motions_rotated[0]
+
