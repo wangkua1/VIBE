@@ -581,6 +581,9 @@ class VibeDataset(Dataset):
         if 'joints3D' in self.db.keys():
             ret['joints3D'] = self.db['joints3D'][start_index:end_index + 1]
 
+        if 'joints3D' in self.db.keys():
+            ret['gt_spin_joints3d'] = self.db['gt_spin_joints3d'][start_index:end_index + 1]
+
         # added for 3dpw - pose before the transformation done in 3dpw_utils.py
         if 'pose_original' in self.db.keys(): 
             ret['pose_original'] = self.db['pose_original'][start_index:end_index + 1]
