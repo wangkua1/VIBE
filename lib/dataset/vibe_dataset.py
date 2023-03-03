@@ -552,6 +552,7 @@ class VibeDataset(Dataset):
                     pose6d.unsqueeze(0))[0]  # expects (N,J,D,T)
 
             # for non-rot6d datatypes, append the extra stuff
+
             if self.data_rep == "rot6d_fc":
                 fc_mask = self.db['fc_mask'][start_index:end_index +
                                              1]  # (T,4)
@@ -561,7 +562,10 @@ class VibeDataset(Dataset):
                                                            0)  # (154,1,T)
             elif self.data_rep == "rot6d_fc_shape":
                 fc_mask = self.db['fc_mask'][start_index:end_index + 1]  # (T,4)
-                shape = torch.from_numpy(self.db['shape'][start_index:end_index + 1]) # (T,10)
+                if self.dataset in ('amass','amass_hml'):
+                    shape = torch.from_numpy(self.db['theta'][start_index:end_index + 1][:,-10:]) # (T,10)
+                else:
+                    shape = torch.from_numpy(self.db['shape'][start_index:end_index + 1]) # (T,10)
 
                 pose6d = pose6d.permute(2, 0, 1)  # (T,25,6)
                 pose6d = torch.cat((pose6d.view(T, J * D), fc_mask, shape),
@@ -583,6 +587,7 @@ class VibeDataset(Dataset):
             action_text='',
             vid_name=vid_name,
         )
+
 
         # add features if the database has them
         if 'features' in self.db.keys():
@@ -608,8 +613,9 @@ class VibeDataset(Dataset):
             ret['pose_original'] = self.db['pose_original'][
                 start_index:end_index + 1]
 
-        if 'trans' in self.db.keys():
-            ret['trans'] = self.db['trans'][start_index:end_index + 1]
+        if self.dataset != 'amass_hml': # hack
+            if 'trans' in self.db.keys():
+                ret['trans'] = self.db['trans'][start_index:end_index + 1]
 
         if 'img_name' in self.db.keys():
             ret['img_name'] = self.db['img_name'][start_index:end_index + 1]
