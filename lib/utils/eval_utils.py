@@ -22,6 +22,50 @@ def compute_accel(joints):
     return np.mean(acceleration_normed, axis=1)
 
 
+
+def compute_error_g_vel(joints_gt, joints_pred):
+    """
+    Computes "global velocity error"
+    Global -- i.e., the joints have global root translation
+
+    Input:
+        joints_gt -- array of (N, T, J, 3).
+        joints_pred -- array of (N, T, J, 3).
+
+    Output:
+        error_g_vel (N, ).
+    """
+    assert len(joints_gt.shape) == 4
+
+    # (N-2)x14x3
+    vel_gt = joints_gt[:, 1:] - joints_gt[:, :-1]
+    vel_pred = joints_pred[:, 1:] - joints_pred[:, :-1]
+
+    normed = np.linalg.norm(vel_pred - vel_gt, axis=-1)
+    return normed.mean(-1).mean(-1)
+
+
+def compute_error_g_acc(joints_gt, joints_pred):
+    """
+    Computes "global acceleration error"
+    Global -- i.e., the joints have global root translation
+
+    Input:
+        joints_gt -- array of (N, T, J, 3).
+        joints_pred -- array of (N, T, J, 3).
+
+    Output:
+        error_g_vel (N, ).
+    """
+    assert len(joints_gt.shape) == 4
+
+    # (N-2)x14x3
+    accel_gt = joints_gt[:, :-2] - 2 * joints_gt[:, 1:-1] + joints_gt[:, 2:]
+    accel_pred = joints_pred[:, :-2] - 2 * joints_pred[:, 1:-1] + joints_pred[:, 2:]
+
+    normed = np.linalg.norm(accel_pred - accel_gt, axis=-1)
+    return normed.mean(-1).mean(-1)
+
 def compute_error_accel(joints_gt, joints_pred, vis=None):
     """
     Computes acceleration error:
