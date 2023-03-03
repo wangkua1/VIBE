@@ -249,6 +249,7 @@ class VibeDataset(Dataset):
                 cv_thetas, cv_transes)
             
             if self.sideline_view:
+                raise # NOT USED ANYMORE, set it to False in data_cfg
                 slv_thetas = torch.tensor(self.db['slv_mosh_theta']).to(
                     self.device).float()  # pose and beta
                 slv_trans = torch.tensor(self.db['slv_trans']).to(
@@ -428,6 +429,7 @@ class VibeDataset(Dataset):
             # 'pose' data will be the dataset output (after processing). This flag 
             # chooses whether we use camera view or sideline view. 
             if self.sideline_view:
+                raise  # NOT USED ANYMORE, set it to False in data_cfg
                 dataset['pose'] = dataset['slv_mosh_theta']
                 dataset['trans'] = dataset['slv_trans']
             else: 
