@@ -410,8 +410,10 @@ class VibeDataset(Dataset):
                     'val', 'test'
             ]:  # JB added test for compatibility with mdm.sample.generate
                 user_list = [9, 11]
-            else:
+            elif split == 'db':
                 user_list = [12]
+            else:
+                user_list = [int(split)]
 
             seq_db_list = []
             for user_i in user_list:
