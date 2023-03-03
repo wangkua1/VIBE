@@ -538,7 +538,8 @@ class VibeDataset(Dataset):
 
         def process_pose6d(pose6d):
             """
-            This helper function was written because the same processing needs to be applied to both "pose" and "cv_pose".
+            This helper function was written because the same processing needs 
+            to be applied to both "pose" and "cv_pose".
             """
             pose6d = pose6d.permute(1, 2, 0)  # (25,6,T)
             if self.normalize_translation:
@@ -799,3 +800,4 @@ def rotate_about_y(motions, theta):
     motions_rotated[:, [-1], [0, 2]] = trans_rotated
 
     return motions_rotated[0]
+
