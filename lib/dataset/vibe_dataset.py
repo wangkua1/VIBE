@@ -268,10 +268,6 @@ class VibeDataset(Dataset):
             'pose_6d'
             in self.db.keys()), "must run `create_db_6d_upfront` first"
 
-        assert hasattr(self, 'db') and (
-            'pose_6d'
-            in self.db.keys()), "must run `create_db_6d_upfront` first"
-
         # this rot6d->xyz conversion code `from motion-diffusion-model` repo (modified)
         self.rot2xyz = Rotation2xyz(device=self.device, dataset=self.dataset)
         self.get_xyz = lambda sample: self.rot2xyz(sample,
@@ -552,7 +548,6 @@ class VibeDataset(Dataset):
                     pose6d.unsqueeze(0))[0]  # expects (N,J,D,T)
 
             # for non-rot6d datatypes, append the extra stuff
-
             if self.data_rep == "rot6d_fc":
                 fc_mask = self.db['fc_mask'][start_index:end_index +
                                              1]  # (T,4)
