@@ -382,3 +382,34 @@ def compute_g_mpjpe(g_pred_j3ds, g_target_j3ds):
         g_target = g_target_j3ds[i]
         errors[i] = g_mpjpe_per_sequence(g_pred, g_target)
     return errors
+
+
+
+
+def compute_nemo_mpjpe(g_pred_j3ds, g_target_j3ds):
+    """
+    An Ad-hoc function that computes MPJPE after performing global rigid alignment as if we're computing G-MPJPE.  The reason is NeMo prediction does not come in CamView, so this is just one way to get an upperbound on MPJPE for this comparison.
+
+    Input:
+        g_pred_j3ds -- (N, T, J, 3)
+        g_target_j3ds -- (N, T, J, 3)
+    """
+    # g_pred_j3ds = to_tensor(g_pred_j3ds)
+    # g_target_j3ds = to_tensor(g_target_j3ds)
+
+    print(f'Evaluating on {g_pred_j3ds.shape[0]} number of sequences...')
+
+    def g_mpjpe_per_transform(g_pred, g_target):
+        R, t = rigid_transform_3D(g_pred.reshape(-1, 3), g_target.reshape(-1, 3))
+        g_pred_transformed = apply_rigid_transform(g_pred, R, t)
+        return g_pred_transformed
+
+    N = len(g_pred_j3ds)
+    errors = np.zeros((N,))
+    for i in range(N):
+        g_pred = g_pred_j3ds[i]
+        g_target = g_target_j3ds[i]
+        g_pred_transformed = g_mpjpe_per_transform(g_pred, g_target)
+        mpjpes, _ = compute_mpjpe(g_pred_transformed, g_target)
+        errors[i] = mpjpes.mean()
+    return errors
