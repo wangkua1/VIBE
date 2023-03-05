@@ -37,6 +37,7 @@ from mdm.utils import rotation_conversions
 from lib.core.config import VIBE_DB_DIR
 from lib.data_utils.img_utils import split_into_chunks
 # from gthmr.lib.utils.geometry import apply_rotvec_to_aa2
+from mdm.utils.rotation_conversions import axis_angle_to_matrix, matrix_to_rotation_6d
 
 ALL_VIBE_DBS = ['amass', 'amass_hml', '3dpw', 'h36m', 'nemomocap']
 
@@ -125,7 +126,7 @@ class VibeDataset(Dataset):
 
         # for data_rep with foot contact, or xyz params, precompute those things
         if self.data_rep in ('rot6d_fc', 'rot6d_fc_shape',
-                             'rot6d_fc_shape_axyz', 'rot6d_fc_shape_rxyz'):
+                             'rot6d_fc_shape_axyz', 'rot6d_fc_shape_axyz_avel'):
             self.do_fc_mask = True
             self.compute_keypoint_data(foot_vel_threshold)
         else:
@@ -204,6 +205,20 @@ class VibeDataset(Dataset):
 
         return torch.cat(all_data)
 
+    def _get_relative_motion(self, motion):
+        # get the 6d component
+        N, J, D = motion.shape
+        # set zero orientation angle
+        root = torch.tensor([[0, 0, 0]])
+        root_6d = matrix_to_rotation_6d(axis_angle_to_matrix(
+            root.double())).float()
+        root_6d = root_6d.unsqueeze(0).repeat(N, 1, 1)
+        motion_rel = torch.clone(motion)
+        motion_rel[:, [0]] = root_6d
+        # set zero translation
+        motion_rel[:, -1] = 0
+        return motion_rel
+
     def correct_orientation(self, data, dataset):
         if dataset in ('amass', 'amass_hml'):
             return rotate_about_D(data.unsqueeze(-1), -np.pi / 2,
@@ -271,8 +286,13 @@ class VibeDataset(Dataset):
         foot_vel_threshold=0.03,
     ):
         """ 
-        Some data representations include foot contact, and xyz positions. 
+        Some data representations include foot contact, xyz positions, and velocity. 
         Precompute it at __init__() and save to db.
+
+        Note: foot contact by default is defined as having joint velocity below 
+        threshold `foot_vel_threshold`. For most datasets, this func uses absolute 
+        velocity, but 3dpw has unreliable global translation, so we use 'relative'
+        velocity (relative to root). 
         """
         assert hasattr(self, 'db') and (
             'pose_6d'
@@ -305,7 +325,6 @@ class VibeDataset(Dataset):
         print(
             f"  Dataloader: getting foot contact data with velocity threshold [{foot_vel_threshold}]"
         )
-
         target_xyz_abs = torch.zeros((T, J - 1, 3),
                                      dtype=torch.float32)  # T is total frames
         target_xyz_rel = torch.zeros((T, J - 1, 3),
@@ -330,15 +349,19 @@ class VibeDataset(Dataset):
                 target_xyz_rel[slc] = self.get_xyz_rel(target6d.to(
                     self.device)).cpu().squeeze(0).permute(2, 0, 1)
 
-        target_vel_abs = torch.linalg.norm(target_xyz_abs[1:] -
-                                           target_xyz_abs[:-1],
-                                           axis=-1)  # (N,24)
-        target_vel_rel = torch.linalg.norm(target_xyz_rel[1:] -
-                                           target_xyz_rel[:-1],
-                                           axis=-1)  # (N,24)
-        # copy the last value
-        target_vel_abs = torch.cat((target_vel_abs, target_vel_abs[[-1]]))
-        target_vel_rel = torch.cat((target_vel_rel, target_vel_rel[[-1]]))
+        def comptue_velocity(target_xyz):
+            # estimate vel naively
+            target_vel_xyz = target_xyz[1:] - target_xyz[:-1]  # (N-1,24,3)
+            # copy the last value to get equal lengths
+            target_vel_xyz = torch.cat((target_vel_xyz, target_vel_xyz[[-1]]),
+                                       0)  # (N,24,3)
+            # norm of each velocity vector
+            target_vel = torch.linalg.norm(target_vel_xyz, axis=-1)  # (N,24)
+
+            return target_vel, target_vel_xyz
+
+        target_vel_abs, target_vel_xyz_abs = comptue_velocity(target_xyz_abs)
+        target_vel_rel, target_vel_xyz_rel = comptue_velocity(target_xyz_rel)
 
         # get foot contact data by estimating velocity and thresholding
         def estimate_foot_contact(target_vel, foot_vel_threshold):
@@ -348,25 +371,33 @@ class VibeDataset(Dataset):
                 l_ankle_idx, l_foot_idx, r_ankle_idx, r_foot_idx
             ]
             target_vel = target_vel[:, relevant_joints]
-            # velocity has shape (N,4,T-1) ... make it (N,4,T) by assuming the last value is the same
-            target_vel = torch.cat((target_vel, target_vel[[-1]]),
-                                   0).cpu()  # (N,T,4)
             fc_mask = (target_vel <= foot_vel_threshold)
-            #
+
             return target_vel, fc_mask
 
-        foot_vel_rel, fc_mask_rel = estimate_foot_contact(
-            target_vel_rel, foot_vel_threshold)
-        foot_vel_abs, fc_mask_abs = estimate_foot_contact(
-            target_vel_abs, foot_vel_threshold)
+        # get fc mask - use the absolute velocity
+        if self.dataset == '3dpw':
+            print("Warning: computing foot contact with relative (global) "\
+                      "velocity for 3dpw because translation is unreliable")
+            foot_vel, fc_mask = estimate_foot_contact(target_vel_rel,
+                                                      foot_vel_threshold)
+        else:
+            foot_vel, fc_mask = estimate_foot_contact(target_vel_abs,
+                                                      foot_vel_threshold)
 
-        self.db['foot_vel'] = foot_vel_abs
-        self.db['fc_mask'] = fc_mask_abs
+        self.db['foot_vel'] = foot_vel  # (N,4,3)
+        self.db['fc_mask'] = fc_mask  # (N,4,3)
 
-        # also save the positions
-        self.db['xyz_abs'] = target_xyz_abs
-        self.db['xyz_rel'] = target_xyz_rel
+        # save positions & velocities
+        self.db['xyz_abs'] = target_xyz_abs  # (N,24,3) #
+        self.db['vel_abs'] = target_vel_xyz_abs  # (N,24,3)
 
+        # relative xyz cannot use the target_xyz from above: needs to use the 
+        # positions adjusted to the root orientation: 
+        self.db['xyz_rel'] = self._get_relative_motion(self.db['pose_6d'])
+
+        ## Warning: if using `xyz_abs` in representation, need to translate
+        # points so that the root starts at (0,0,0). Not necessary for `vel_abs`.
         return
 
     def filter_videos(self):
@@ -589,9 +620,12 @@ class VibeDataset(Dataset):
             to be applied to both "pose" and "cv_pose".
             """
             pose6d = pose6d.permute(1, 2, 0)  # (25,6,T)
+            
             if self.normalize_translation:
                 # has format (J,6,T). translation is the last joint (dim 0)
                 pose6d[-1, :, :] = pose6d[-1, :, :] - pose6d[-1, :, [0]]
+            else: 
+                raise "Not normalizing translation is probably a bad idea"
 
             # rotation augmentation about y (vertical) axis
             if self.augment_camview:
@@ -603,30 +637,45 @@ class VibeDataset(Dataset):
             ## for non-rot6d datatypes, append the extra stuff.
             # flatten dims 1,2: (N,26,6,T) --> (N,150,1,T). And add foot contact
             if self.data_rep in ('rot6d_fc', 'rot6d_fc_shape',
-                                 'rot6d_fc_shape_rxyz', 'rot6d_fc_shape_axyz'):
+                                 'rot6d_fc_shape_axyz',
+                                 'rot6d_fc_shape_axyz_avel'):
                 fc_mask = self.db['fc_mask'][start_index:end_index +
                                              1]  # (T,4)
                 pose6d = torch.cat((pose6d.view(T, J * D), fc_mask),
                                    1).unsqueeze(2)  # (T,154,1)
 
-            if self.data_rep in ("rot6d_fc_shape", 'rot6d_fc_shape_rxyz',
-                                 'rot6d_fc_shape_axyz'):
+            if self.data_rep in ("rot6d_fc_shape", 'rot6d_fc_shape_axyz',
+                                 "rot6d_fc_shape_axyz_avel"):
                 shape = torch.from_numpy(
                     self.db['shape'][start_index:end_index + 1])  # (T,10)
                 pose6d = torch.cat((pose6d, shape.unsqueeze(2)),
                                    dim=1)  # (T,164,1)
 
-            if self.data_rep == "rot6d_fc_shape_rxyz":
-                xyz_rel = self.db['xyz_rel'][start_index:end_index +
-                                             1]  # (T,24,3)
-                xyz_rel = xyz_rel.view(-1, 24 * 3, 1)
-                pose6d = torch.cat((pose6d, xyz_rel), dim=1)  # (T,236,1)
+            if self.data_rep in ("rot6d_fc_shape_axyz",
+                                 "rot6d_fc_shape_axyz_avel"):
+                # Note: 0th joint of `xyz_abs` is the same as the 25th joint of 
+                # the rot6d rep ... so this data will be duplictaed
 
-            if self.data_rep == "rot6d_fc_shape_axyz":
-                xyz_abs = self.db['xyz_abs'][start_index:end_index +
-                                             1]  # (T,24,3)
+                # clone to avoid inplace modifying when shifting translation.
+                xyz_abs = torch.clone(self.db['xyz_abs'][start_index:end_index +
+                                             1])  # (T,24,3)
+                # shift so that frame 0 is centered
+                if self.normalize_translation:
+                    # so that the root joint is at the origin at time 0
+                    xyz_abs_root = xyz_abs[:,[0]]
+                    xyz_abs = xyz_abs - xyz_abs_root[[0]]
+                    assert xyz_abs[0,0].sum().item()==0
+                
+                # reshape, etc
                 xyz_abs = xyz_abs.view(-1, 24 * 3, 1)
                 pose6d = torch.cat((pose6d, xyz_abs), dim=1)  # (T,236,1)
+
+            if self.data_rep == "rot6d_fc_shape_axyz_avel":
+                # get velocity, flatten and add to the thing
+                vel_abs = self.db['vel_abs'][start_index:end_index+1]
+                vel_abs = vel_abs.view(-1,24*3, 1)
+                pose6d = torch.cat((pose6d, vel_abs), dim=1)  # (T,308,1)
+                
 
             pose6d = pose6d.permute(1, 2, 0)
 
@@ -728,7 +777,7 @@ def rotate_points(origin, point, angle):
     """
     Rotate a point counterclockwise by a given angle around a given origin.
 
-    The angle should be given in radians.
+    The angle should be given in radians. For 2d datasets
     """
     ox, oy = origin[0], origin[1]
     px, py = point[:, 0], point[:, 1]
@@ -835,38 +884,3 @@ def rotate_about_D(motions, theta, D=1):
 
     return motions_rotated
 
-
-def rotate_about_y(motions, theta):
-    """ 
-    For a motion in rot6d format (N,25,6,T), rotate the whole
-    motion about the y (vertical) axes and about the origin.
-    """
-    assert motions.shape[:2] == (25, 6)
-    motions_rotated = motions.unsqueeze(0)
-    # rotate the root
-    root = motions_rotated[:, [0]].permute(0, 3, 1, 2)
-    root = rotation_conversions.matrix_to_axis_angle(
-        rotation_conversions.rotation_6d_to_matrix(root))
-    shape = root.shape
-    rotvec = torch.Tensor(theta * np.array([0, -1, 0])[None]).to(
-        root.device).float()
-    root_rotated = apply_rotvec_to_aa2(rotvec, root.reshape(-1,
-                                                            3)).view(*shape)
-    root_rotated = rotation_conversions.matrix_to_rotation_6d(
-        rotation_conversions.axis_angle_to_matrix(root_rotated))
-    root_rotated = root_rotated.permute(0, 2, 3, 1)
-
-    # rotate the translation points
-    trans = motions_rotated[:, [-1], [0, 2]].permute(0, 2, 1)  # (N,T,2)
-    shape = trans.shape
-    assert trans[:, 0].sum().item(
-    ) == 0, "rotation augmentation only allowed when also doing translation normalization"
-    trans_rotated = rotate_points(np.array([0, 0]), trans.reshape(-1, 2),
-                                  theta).reshape(shape)
-    trans_rotated = trans_rotated.permute(0, 2, 1)
-
-    # # assign the new values
-    motions_rotated[:, [0]] = root_rotated
-    motions_rotated[:, [-1], [0, 2]] = trans_rotated
-
-    return motions_rotated[0]
