@@ -31,7 +31,7 @@ from collections import defaultdict
 from torch.utils.data import Dataset
 from mdm.model.rotation2xyz import Rotation2xyz
 from gthmr.lib.models.emp import rotate_motion_by_rotmat
-# 
+#
 import os.path as osp
 from mdm.utils import rotation_conversions
 from lib.core.config import VIBE_DB_DIR
@@ -50,7 +50,7 @@ class VibeDataset(Dataset):
                  sideline_view=False,
                  restrict_subsets=None,
                  data_rep='rot6d',
-                 foot_vel_threshold=0.01,
+                 foot_vel_threshold=0.03,
                  normalize_translation=True,
                  rotation_augmentation=False,
                  augment_camview=False,
@@ -122,12 +122,12 @@ class VibeDataset(Dataset):
 
         # Precompute the 6d articulation.
         self.create_db_6d_upfront()
-        
-        # for data_rep with foot contact, prepare it 
-        if self.data_rep in ('rot6d_fc','rot6d_fc_shape'):
-            self.do_fc_mask = True 
-            # self.compute_fc_mask(self.FOOT_VEL_THRESHOLD[self.dataset])
-            self.compute_fc_mask(foot_vel_threshold)
+
+        # for data_rep with foot contact, or xyz params, precompute those things
+        if self.data_rep in ('rot6d_fc', 'rot6d_fc_shape',
+                             'rot6d_fc_shape_axyz', 'rot6d_fc_shape_rxyz'):
+            self.do_fc_mask = True
+            self.compute_keypoint_data(foot_vel_threshold)
         else:
             self.do_fc_mask = False
 
@@ -235,6 +235,9 @@ class VibeDataset(Dataset):
             self.device).float()  # pose and beta
         transes = torch.tensor(self.db['trans']).to(self.device).float()
 
+        if self.dataset in ('amass', 'amass_hml'):
+            self.db['shape'] = thetas[:, -10:].cpu().numpy()
+
         self.db['pose_6d'] = self._create_6d_from_theta(thetas, transes)
 
         # For HMR datasets, do the same for camera-view data
@@ -263,60 +266,106 @@ class VibeDataset(Dataset):
             pass
             # raise ValueError("Please implement this ... ")
 
-    def compute_fc_mask(self, foot_vel_threshold=0.03):
+    def compute_keypoint_data(
+        self,
+        foot_vel_threshold=0.03,
+    ):
+        """ 
+        Some data representations include foot contact, and xyz positions. 
+        Precompute it at __init__() and save to db.
+        """
         assert hasattr(self, 'db') and (
             'pose_6d'
             in self.db.keys()), "must run `create_db_6d_upfront` first"
 
         # this rot6d->xyz conversion code `from motion-diffusion-model` repo (modified)
         self.rot2xyz = Rotation2xyz(device=self.device, dataset=self.dataset)
-        self.get_xyz = lambda sample: self.rot2xyz(sample,
-                                                   mask=None,
-                                                   pose_rep="rot6d",
-                                                   translation=True,
-                                                   glob=True,
-                                                   jointstype='smpl',
-                                                   vertstrans=False)
+        self.get_xyz_abs = lambda sample: self.rot2xyz(sample.clone(),
+                                                       mask=None,
+                                                       pose_rep="rot6d",
+                                                       translation=True,
+                                                       glob=True,
+                                                       jointstype='smpl',
+                                                       vertstrans=True)
+        self.get_xyz_rel = lambda sample: self.rot2xyz(sample.clone(),
+                                                       mask=None,
+                                                       pose_rep="rot6d",
+                                                       translation=True,
+                                                       glob=True,
+                                                       jointstype='smpl',
+                                                       vertstrans=False)
 
         self.foot_vel_threshold = foot_vel_threshold
         # create an array for putting foot velocities
         T, J, D = self.db['pose_6d'].shape
-
         assert J == 25 and D == 6
-        foot_vel = torch.zeros((T, 4), dtype=torch.float32, device='cpu')
 
-        # iterate over batches of vid indices
+        # prepare stuff for iterating over batches of vid indices
         batch_size = 128 * 60 // self.num_frames  # scale wrt vid length to prevent OOM error
         print(
             f"  Dataloader: getting foot contact data with velocity threshold [{foot_vel_threshold}]"
         )
-        target_xyz = torch.zeros((T, J - 1, 3),
-                                 dtype=torch.float32)  # T is total frames
+
+        target_xyz_abs = torch.zeros((T, J - 1, 3),
+                                     dtype=torch.float32)  # T is total frames
+        target_xyz_rel = torch.zeros((T, J - 1, 3),
+                                     dtype=torch.float32)  # T is total frames
         batch_size = 2048 * 2
         n_iters = T // batch_size + 1
+
+        # iterate over the db, saving the relative position
         for i in tqdm.tqdm(range(n_iters)):
             if i < n_iters - 1:
                 slc = slice(i * batch_size, (i + 1) * batch_size)
             else:
                 slc = slice(i * batch_size, T)
-            target = self.db['pose_6d'][slc]
-            with torch.no_grad():
-                target_xyz[slc] = self.get_xyz(
-                    target.to(self.device).unsqueeze(-1)).cpu().squeeze(-1)
 
-        l_ankle_idx, r_ankle_idx, l_foot_idx, r_foot_idx = 7, 8, 10, 11
-        relevant_joints = [l_ankle_idx, l_foot_idx, r_ankle_idx, r_foot_idx]
-        gt_joint_xyz = target_xyz.permute(
-            1, 2, 0).unsqueeze(0)[:,
-                                  relevant_joints, :, :]  # [N,4,3,T] set N=1
-        gt_joint_vel = torch.linalg.norm(gt_joint_xyz[:, :, :, 1:] -
-                                         gt_joint_xyz[:, :, :, :-1],
-                                         axis=2)  # [BatchSize, 4, Frames]
-        # velocity has shape (N,4,T-1) ... make it (N,4,T) by assuming the last value is the same
-        gt_joint_vel = torch.cat((gt_joint_vel, gt_joint_vel[..., [-1]]),
-                                 -1).permute(0, 2, 1)[0].cpu()  # (N,T,4)
-        self.db['foot_vel'] = foot_vel
-        self.db['fc_mask'] = (foot_vel <= foot_vel_threshold)
+            # put T at the end of the batch: treats the whole batch as a
+            # continuous sequence
+            target6d = self.db['pose_6d'][slc].permute(1, 2, 0).unsqueeze(
+                0)  # (1,25,6,bs)
+            with torch.no_grad():
+                target_xyz_abs[slc] = self.get_xyz_abs(target6d.to(
+                    self.device)).cpu().squeeze(0).permute(2, 0, 1)
+                target_xyz_rel[slc] = self.get_xyz_rel(target6d.to(
+                    self.device)).cpu().squeeze(0).permute(2, 0, 1)
+
+        target_vel_abs = torch.linalg.norm(target_xyz_abs[1:] -
+                                           target_xyz_abs[:-1],
+                                           axis=-1)  # (N,24)
+        target_vel_rel = torch.linalg.norm(target_xyz_rel[1:] -
+                                           target_xyz_rel[:-1],
+                                           axis=-1)  # (N,24)
+        # copy the last value
+        target_vel_abs = torch.cat((target_vel_abs, target_vel_abs[[-1]]))
+        target_vel_rel = torch.cat((target_vel_rel, target_vel_rel[[-1]]))
+
+        # get foot contact data by estimating velocity and thresholding
+        def estimate_foot_contact(target_vel, foot_vel_threshold):
+            l_ankle_idx, r_ankle_idx, l_foot_idx, r_foot_idx = 7, 8, 10, 11
+
+            relevant_joints = [
+                l_ankle_idx, l_foot_idx, r_ankle_idx, r_foot_idx
+            ]
+            target_vel = target_vel[:, relevant_joints]
+            # velocity has shape (N,4,T-1) ... make it (N,4,T) by assuming the last value is the same
+            target_vel = torch.cat((target_vel, target_vel[[-1]]),
+                                   0).cpu()  # (N,T,4)
+            fc_mask = (target_vel <= foot_vel_threshold)
+            #
+            return target_vel, fc_mask
+
+        foot_vel_rel, fc_mask_rel = estimate_foot_contact(
+            target_vel_rel, foot_vel_threshold)
+        foot_vel_abs, fc_mask_abs = estimate_foot_contact(
+            target_vel_abs, foot_vel_threshold)
+
+        self.db['foot_vel'] = foot_vel_abs
+        self.db['fc_mask'] = fc_mask_abs
+
+        # also save the positions
+        self.db['xyz_abs'] = target_xyz_abs
+        self.db['xyz_rel'] = target_xyz_rel
 
         return
 
@@ -547,34 +596,47 @@ class VibeDataset(Dataset):
 
             # rotation augmentation about y (vertical) axis
             if self.augment_camview:
-                pose6d = augment_world_to_camera(
-                    pose6d.unsqueeze(0))[0]  # expects (N,J,D,T)
+                pose6d = augment_world_to_camera(pose6d.unsqueeze(0))[
+                    0]  # expects (N,J,D,T): output is (25,6,T)
 
-            # for non-rot6d datatypes, append the extra stuff
-            if self.data_rep == "rot6d_fc":
+            pose6d = pose6d.permute(2, 0, 1)  # (T,25,6)
+
+            ## for non-rot6d datatypes, append the extra stuff.
+            # flatten dims 1,2: (N,26,6,T) --> (N,150,1,T). And add foot contact
+            if self.data_rep in ('rot6d_fc', 'rot6d_fc_shape',
+                                 'rot6d_fc_shape_rxyz', 'rot6d_fc_shape_axyz'):
                 fc_mask = self.db['fc_mask'][start_index:end_index +
                                              1]  # (T,4)
-                pose6d = pose6d.permute(2, 0, 1)  # (T,25,6)
                 pose6d = torch.cat((pose6d.view(T, J * D), fc_mask),
-                                   1).unsqueeze(2).permute(1, 2,
-                                                           0)  # (154,1,T)
-            elif self.data_rep == "rot6d_fc_shape":
-                fc_mask = self.db['fc_mask'][start_index:end_index + 1]  # (T,4)
-                if self.dataset in ('amass','amass_hml'):
-                    shape = torch.from_numpy(self.db['theta'][start_index:end_index + 1][:,-10:]) # (T,10)
-                else:
-                    shape = torch.from_numpy(self.db['shape'][start_index:end_index + 1]) # (T,10)
+                                   1).unsqueeze(2)  # (T,154,1)
 
-                pose6d = pose6d.permute(2, 0, 1)  # (T,25,6)
-                pose6d = torch.cat((pose6d.view(T, J * D), fc_mask, shape),
-                                   1).unsqueeze(2).permute(1, 2,
-                                                           0)  # (164,1,T)
+            if self.data_rep in ("rot6d_fc_shape", 'rot6d_fc_shape_rxyz',
+                                 'rot6d_fc_shape_axyz'):
+                shape = torch.from_numpy(
+                    self.db['shape'][start_index:end_index + 1])  # (T,10)
+                pose6d = torch.cat((pose6d, shape.unsqueeze(2)),
+                                   dim=1)  # (T,164,1)
+
+            if self.data_rep == "rot6d_fc_shape_rxyz":
+                xyz_rel = self.db['xyz_rel'][start_index:end_index +
+                                             1]  # (T,24,3)
+                xyz_rel = xyz_rel.view(-1, 24 * 3, 1)
+                pose6d = torch.cat((pose6d, xyz_rel), dim=1)  # (T,236,1)
+
+            if self.data_rep == "rot6d_fc_shape_axyz":
+                xyz_abs = self.db['xyz_abs'][start_index:end_index +
+                                             1]  # (T,24,3)
+                xyz_abs = xyz_abs.view(-1, 24 * 3, 1)
+                pose6d = torch.cat((pose6d, xyz_abs), dim=1)  # (T,236,1)
+
+            pose6d = pose6d.permute(1, 2, 0)
 
             # if the data is smaller than self.num_frames, pad it with the last frame value
             if pose6d.shape[-1] < self.num_frames:
                 n_addframes = self.num_frames - pose6d.shape[-1]
                 pose6d = torch.cat(
                     (pose6d, pose6d[..., [-1]].repeat(1, 1, n_addframes)), -1)
+
             return pose6d
 
         data = process_pose6d(data)
@@ -586,49 +648,54 @@ class VibeDataset(Dataset):
             vid_name=vid_name,
         )
 
+        if self.dataset != "amass_hml":
+            # add features if the database has them
+            if 'features' in self.db.keys():
+                ret['features'] = self.db['features'][start_index:end_index +
+                                                      1]
 
-        # add features if the database has them
-        if 'features' in self.db.keys():
-            ret['features'] = self.db['features'][start_index:end_index + 1]
+            if 'cv_pose_6d' in self.db.keys():
+                cv_pose_6d = self.db['cv_pose_6d'][start_index:end_index + 1]
+                ret['cv_pose_6d'] = process_pose6d(cv_pose_6d)
 
-        if 'cv_pose_6d' in self.db.keys():
-            cv_pose_6d = self.db['cv_pose_6d'][start_index:end_index + 1]
-            ret['cv_pose_6d'] = process_pose6d(cv_pose_6d)
+            if 'slv_pose_6d' in self.db.keys():
+                slv_pose_6d = self.db['slv_pose_6d'][start_index:end_index + 1]
+                ret['slv_pose_6d'] = process_pose6d(slv_pose_6d)
 
-        if 'slv_pose_6d' in self.db.keys():
-            slv_pose_6d = self.db['slv_pose_6d'][start_index:end_index + 1]
-            ret['slv_pose_6d'] = process_pose6d(slv_pose_6d)
+            if 'joints3D' in self.db.keys():
+                ret['joints3D'] = self.db['joints3D'][start_index:end_index +
+                                                      1]
 
-        if 'joints3D' in self.db.keys():
-            ret['joints3D'] = self.db['joints3D'][start_index:end_index + 1]
+            if 'gt_spin_joints3d' in self.db.keys():
+                ret['gt_spin_joints3d'] = self.db['gt_spin_joints3d'][
+                    start_index:end_index + 1]
 
-        if 'gt_spin_joints3d' in self.db.keys():
-            ret['gt_spin_joints3d'] = self.db['gt_spin_joints3d'][
-                start_index:end_index + 1]
+            # added for 3dpw - pose before the transformation done in 3dpw_utils.py
+            if 'pose_original' in self.db.keys():
+                ret['pose_original'] = self.db['pose_original'][
+                    start_index:end_index + 1]
 
-        # added for 3dpw - pose before the transformation done in 3dpw_utils.py
-        if 'pose_original' in self.db.keys():
-            ret['pose_original'] = self.db['pose_original'][
-                start_index:end_index + 1]
+            if self.dataset != 'amass_hml':  # hack
+                if 'trans' in self.db.keys():
+                    ret['trans'] = self.db['trans'][start_index:end_index + 1]
 
-        if self.dataset != 'amass_hml': # hack
-            if 'trans' in self.db.keys():
-                ret['trans'] = self.db['trans'][start_index:end_index + 1]
+            if 'img_name' in self.db.keys():
+                ret['img_name'] = self.db['img_name'][start_index:end_index +
+                                                      1]
 
-        if 'img_name' in self.db.keys():
-            ret['img_name'] = self.db['img_name'][start_index:end_index + 1]
+            if 'joints2D' in self.db.keys():
+                ret['kp_2d'] = self.db['joints2D'][start_index:end_index + 1]
 
-        if 'joints2D' in self.db.keys():
-            ret['kp_2d'] = self.db['joints2D'][start_index:end_index + 1]
-
-        if 'shape' in self.db.keys():
-            # Prepare 'theta'
-            pose = np.array(self.db['pose'][start_index:end_index + 1])
-            shape = np.array(self.db['shape'][start_index:end_index + 1])
-            N = len(pose)
-            dummy_cam = np.zeros((N, 3))
-            theta = np.concatenate([dummy_cam, pose, shape], 1)
-            ret['theta'] = theta
+            if 'shape' in self.db.keys():
+                # Prepare 'theta'
+                pose_key = 'theta' if self.dataset in ('amass',
+                                                       'amass_hml') else 'pose'
+                pose = np.array(self.db[pose_key][start_index:end_index + 1])
+                shape = np.array(self.db['shape'][start_index:end_index + 1])
+                N = len(pose)
+                dummy_cam = np.zeros((N, 3))
+                theta = np.concatenate([dummy_cam, pose, shape], 1)
+                ret['theta'] = theta
 
         return ret
 
@@ -804,4 +871,3 @@ def rotate_about_y(motions, theta):
     motions_rotated[:, [-1], [0, 2]] = trans_rotated
 
     return motions_rotated[0]
-
