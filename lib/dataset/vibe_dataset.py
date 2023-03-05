@@ -79,7 +79,7 @@ class VibeDataset(Dataset):
             'amass_hml': 1,
             'h36m': 2,
             '3dpw': 1,
-            'nemomocap': 1
+            'nemomocap': 1,
         }
         self.dataset = dataset
         self.dataname = dataset  # mdm training code uses this
@@ -375,7 +375,7 @@ class VibeDataset(Dataset):
         elif self.dataset == '3dpw':
             db = self.load_db_3dpw(split)
         elif self.dataset == 'nemomocap':
-            db = self.load_db_nemomocap(split)
+            db = self.load_db_nemomocap(split, subsample=subsample)
         else:
             valid_datasets = ['amass', 'h36m', '3dpw']
             raise ValueEror(
@@ -450,9 +450,10 @@ class VibeDataset(Dataset):
         db = joblib.load(db_file)
         return db
 
-    def load_db_nemomocap(self, split):
+    def load_db_nemomocap(self, split, subsample=1):
         db_file = osp.join(VIBE_DB_DIR, f'nemomocap_{split}_20230228_db.pt')
         db = joblib.load(db_file)
+        db = self.subsample(db, subsample=subsample)
         db['trans'] = db['trans'].squeeze(1)
         return db
 
