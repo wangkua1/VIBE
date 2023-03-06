@@ -249,6 +249,8 @@ class VibeDataset(Dataset):
         thetas = torch.tensor(self.db[pose_key]).to(
             self.device).float()  # pose and beta
         transes = torch.tensor(self.db['trans']).to(self.device).float()
+        # if self.dataset=='amass':
+            # import ipdb; ipdb.set_trace()
 
         if self.dataset in ('amass', 'amass_hml'):
             self.db['shape'] = thetas[:, -10:].cpu().numpy()
@@ -737,9 +739,12 @@ class VibeDataset(Dataset):
 
             if 'shape' in self.db.keys():
                 # Prepare 'theta'
-                pose_key = 'theta' if self.dataset in ('amass',
-                                                       'amass_hml') else 'pose'
-                pose = np.array(self.db[pose_key][start_index:end_index + 1])
+                if self.dataset in ('amass','amass_hml'):
+                    pose = np.array(self.db['theta'][start_index:end_index + 1])
+                    pose = pose[...,:-10] # remove shape bc it will be added back
+                else:
+                    pose = np.array(self.db['pose'][start_index:end_index + 1])
+
                 shape = np.array(self.db['shape'][start_index:end_index + 1])
                 N = len(pose)
                 dummy_cam = np.zeros((N, 3))
