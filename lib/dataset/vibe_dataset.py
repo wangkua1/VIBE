@@ -542,6 +542,10 @@ class VibeDataset(Dataset):
             db_file = osp.join(VIBE_DB_DIR, f'nemomocap2_{split}_20230305_db.pt')
         else:
             raise ValueError('Unknown version of NeMo-MoCap dataset.')
+        db = joblib.load(db_file)
+        # db = self.subsample(db, subsample=subsample)
+        db['trans'] = db['trans'].squeeze(1)
+        return db
 
     # DONT SUBSAMPLE NEMO ANYMORE
     # def load_db_nemomocap(self, split, subsample=1):
