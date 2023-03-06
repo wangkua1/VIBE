@@ -39,7 +39,9 @@ from lib.data_utils.img_utils import split_into_chunks
 # from gthmr.lib.utils.geometry import apply_rotvec_to_aa2
 from mdm.utils.rotation_conversions import axis_angle_to_matrix, matrix_to_rotation_6d
 
-ALL_VIBE_DBS = ['amass', 'amass_hml', '3dpw', 'h36m', 'nemomocap', 'nemomocap2']
+ALL_VIBE_DBS = [
+    'amass', 'amass_hml', '3dpw', 'h36m', 'nemomocap', 'nemomocap2'
+]
 
 
 class VibeDataset(Dataset):
@@ -128,7 +130,7 @@ class VibeDataset(Dataset):
         # for data_rep with foot contact, or xyz params, precompute those things
         if self.data_rep in ('rot6d_fc', 'rot6d_fc_shape',
                              'rot6d_fc_shape_axyz', 'rot6d_fc_shape_axyz_avel',
-                             'rot6d_ks', 'rot6d_ks2'):
+                             'rot6d_ks', 'rot6d_ks_1', 'rot6d_ks_2'):
             self.do_fc_mask = True
             self.compute_keypoint_data(foot_vel_threshold)
         else:
@@ -210,14 +212,14 @@ class VibeDataset(Dataset):
     def _get_relative_motion(self, motion):
         # get the 6d component
         N, J, D = motion.shape
-        # set zero orientation angle
+        # set zero orientation angle of the root for all T
         root = torch.tensor([[0, 0, 0]])
         root_6d = matrix_to_rotation_6d(axis_angle_to_matrix(
             root.double())).float()
         root_6d = root_6d.unsqueeze(0).repeat(N, 1, 1)
         motion_rel = torch.clone(motion)
         motion_rel[:, [0]] = root_6d
-        # set zero translation
+        # set zero translation for all T
         motion_rel[:, -1] = 0
         return motion_rel
 
@@ -288,7 +290,8 @@ class VibeDataset(Dataset):
         foot_vel_threshold=0.03,
     ):
         """ 
-        Some data representations include foot contact, xyz positions, and velocity. 
+        Some data representations include foot contact, xyz positions, velocity, 
+        acceleration, angular velocity. 
         Precompute it at __init__() and save to db.
 
         Note: foot contact by default is defined as having joint velocity below 
@@ -395,7 +398,7 @@ class VibeDataset(Dataset):
 
         # get fc mask - use the absolute velocity
         if self.dataset == '3dpw':
-            print("Warning: computing foot contact with relative (global) "\
+            print("Warning: computing foot contact with relative (global) " \
                       "velocity for 3dpw because translation is unreliable")
             foot_vel, fc_mask = estimate_foot_contact(target_vel_rel,
                                                       foot_vel_threshold)
@@ -425,7 +428,8 @@ class VibeDataset(Dataset):
             """
             # identify vid boundaries
             vid_name = self.db['vid_name']
-            if vid_name.ndim == 2: vid_name = vid_name[:, 0]
+            if vid_name.ndim == 2:
+                vid_name = vid_name[:, 0]  # different formats
             idxs_end = np.where(vid_name[:-1] != vid_name[1:])[0]  #
             idxs_start = np.hstack((np.array([0]), idxs_end + 1))
             # order 1 finite difference, e.g. velocity
@@ -438,20 +442,22 @@ class VibeDataset(Dataset):
             else:
                 raise
             return val
+        
+        self.db['fc_mask'] = torch.tensor(fc_mask)  # (N,4,1)
 
         self.db['foot_vel'] = clean_vid_boundaries(foot_vel,
                                                    order=1)  # (N,4,3)
-        self.db['fc_mask'] = fc_mask  # (N,4,3)
 
         # save positions & velocities
-        self.db['xyz_abs'] = clean_vid_boundaries(target_xyz_abs,
-                                                  order=1)  # (N,24,3) #
+        self.db['xyz_abs'] = target_xyz_abs
         self.db['vel_abs'] = clean_vid_boundaries(target_vel_xyz_abs,
                                                   order=1)  # (N,24,3)
 
         # relative xyz cannot use the target_xyz from above: needs to use the
         # positions adjusted to the root orientation:
-        self.db['xyz_rel'] = self._get_relative_motion(self.db['pose_6d'])
+        self.db['xyz_rel'] = clean_vid_boundaries(self._get_relative_motion(
+            self.db['pose_6d']),
+                                                  order=1)
 
         # acceleration
         self.db['accel_abs'] = clean_vid_boundaries(target_accel_xyz_abs,
@@ -598,9 +604,11 @@ class VibeDataset(Dataset):
 
     def load_db_nemomocap(self, split, version=1):
         if version == 1:
-            db_file = osp.join(VIBE_DB_DIR, f'nemomocap_{split}_20230228_db.pt')
+            db_file = osp.join(VIBE_DB_DIR,
+                               f'nemomocap_{split}_20230228_db.pt')
         elif version == 2:
-            db_file = osp.join(VIBE_DB_DIR, f'nemomocap2_{split}_20230305_db.pt')
+            db_file = osp.join(VIBE_DB_DIR,
+                               f'nemomocap2_{split}_20230305_db.pt')
         else:
             raise ValueError('Unknown version of NeMo-MoCap dataset.')
         db = joblib.load(db_file)
@@ -714,25 +722,30 @@ class VibeDataset(Dataset):
 
             pose6d = pose6d.permute(2, 0, 1)  # (T,25,6)
 
-            ## for non-rot6d datatypes, append the extra stuff.
+            ## for non-rot6d datatypes, append extra stuff. There's a lot of code
+            ## here for different examples, but it's all very similar
+
             # flatten dims 1,2: (N,26,6,T) --> (N,150,1,T). And add foot contact
             if self.data_rep in ('rot6d_fc', 'rot6d_fc_shape',
                                  'rot6d_fc_shape_axyz',
-                                 'rot6d_fc_shape_axyz_avel', 'rot6d_ks'):
+                                 'rot6d_fc_shape_axyz_avel', 'rot6d_ks',
+                                 'rot6d_ks_1', 'rot6d_ks_2'):
                 fc_mask = self.db['fc_mask'][start_index:end_index +
                                              1]  # (T,4)
                 pose6d = torch.cat((pose6d.view(T, J * D), fc_mask),
                                    1).unsqueeze(2)  # (T,154,1)
 
             if self.data_rep in ("rot6d_fc_shape", 'rot6d_fc_shape_axyz',
-                                 "rot6d_fc_shape_axyz_avel", 'rot6d_ks'):
+                                 "rot6d_fc_shape_axyz_avel", 'rot6d_ks',
+                                 'rot6d_ks_1', 'rot6d_ks_2'):
                 shape = torch.from_numpy(
                     self.db['shape'][start_index:end_index + 1])  # (T,10)
                 pose6d = torch.cat((pose6d, shape.unsqueeze(2)),
                                    dim=1)  # (T,164,1)
 
             if self.data_rep in ("rot6d_fc_shape_axyz",
-                                 "rot6d_fc_shape_axyz_avel", 'rot6d_ks'):
+                                 "rot6d_fc_shape_axyz_avel", 'rot6d_ks',
+                                 'rot6d_ks_1', 'rot6d_ks_2'):
                 # Note: 0th joint of `xyz_abs` is the same as the 25th joint of
                 # the rot6d rep ... so this data will be duplictaed
 
@@ -746,25 +759,38 @@ class VibeDataset(Dataset):
                     xyz_abs = xyz_abs - xyz_abs_root[[0]]
                     assert xyz_abs[0, 0].sum().item() == 0
 
-                # reshape, etc
+                # reshape, concat
                 xyz_abs = xyz_abs.view(-1, 24 * 3, 1)
                 pose6d = torch.cat((pose6d, xyz_abs), dim=1)  # (T,236,1)
 
-            if self.data_rep in ("rot6d_fc_shape_axyz_avel", 'rot6d_ks'):
+            if self.data_rep in ("rot6d_fc_shape_axyz_avel", 'rot6d_ks',
+                                 'rot6d_ks_1', 'rot6d_ks_2'):
                 # get velocity, flatten and add to the thing
                 vel_abs = self.db['vel_abs'][start_index:end_index + 1]
                 vel_abs = vel_abs.view(-1, 24 * 3, 1)
                 pose6d = torch.cat((pose6d, vel_abs), dim=1)  # (T,308,1)
 
-            if self.data_rep == 'rot6d_ks':
+            if 'rot6d_ks' in self.data_rep:
                 accel_abs = self.db['accel_abs'][start_index:end_index + 1]
                 accel_abs = accel_abs.view(T, 24 * 3, 1)
                 angular_vel = self.db['angular_vel'][start_index:end_index + 1]
                 angular_vel = angular_vel.unsqueeze(2)
-                
-                pose6d = torch.cat((pose6d, accel_abs, angular_vel), dim=1) # (560,524,1)
 
-            pose6d = pose6d.permute(1, 2, 0)
+                if self.data_rep == 'rot6d_ks_1':
+                    pose6d = torch.cat((pose6d, accel_abs), dim=1)  # (T,380,1)
+
+                elif self.data_rep == 'rot6d_ks_2':
+                    pose6d = torch.cat((pose6d, angular_vel),
+                                       dim=1)  # (T,452,1)
+
+                elif self.data_rep == 'rot6d_ks':
+                    pose6d = torch.cat((pose6d, accel_abs, angular_vel),
+                                       dim=1)  # (T,524,1)
+
+            else:
+                raise
+
+            pose6d = pose6d.permute(1, 2, 0)  # (J,D,T)
 
             # if the data is smaller than self.num_frames, pad it with the last frame value
             if pose6d.shape[-1] < self.num_frames:
