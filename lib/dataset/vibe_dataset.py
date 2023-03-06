@@ -39,7 +39,7 @@ from lib.data_utils.img_utils import split_into_chunks
 # from gthmr.lib.utils.geometry import apply_rotvec_to_aa2
 from mdm.utils.rotation_conversions import axis_angle_to_matrix, matrix_to_rotation_6d
 
-ALL_VIBE_DBS = ['amass', 'amass_hml', '3dpw', 'h36m', 'nemomocap']
+ALL_VIBE_DBS = ['amass', 'amass_hml', '3dpw', 'h36m', 'nemomocap', 'nemomocap2']
 
 
 class VibeDataset(Dataset):
@@ -81,6 +81,7 @@ class VibeDataset(Dataset):
             'h36m': 2,
             '3dpw': 1,
             'nemomocap': 1,
+            'nemomocap2': 2,
         }
         self.dataset = dataset
         self.dataname = dataset  # mdm training code uses this
@@ -96,7 +97,7 @@ class VibeDataset(Dataset):
         self.foot_vel_threshold = foot_vel_threshold  # for foot contact mask if it's used
 
         self.stride = self.seqlen
-        if self.dataset == 'nemomocap':
+        if self.dataset in ('nemomocap', 'nemomocap2'):
             assert self.seqlen == 60
             self.stride = 30  # doing this so we don't waste the last second
 
@@ -224,7 +225,7 @@ class VibeDataset(Dataset):
         if dataset in ('amass', 'amass_hml'):
             return rotate_about_D(data.unsqueeze(-1), -np.pi / 2,
                                   0).squeeze(-1)
-        elif dataset in ('h36m', '3dpw', 'nemomocap'):
+        elif dataset in ('h36m', '3dpw', 'nemomocap', 'nemomocap2'):
             # return data
             return rotate_about_D(data.unsqueeze(-1), np.pi, 0).squeeze(-1)
         else:
@@ -518,7 +519,9 @@ class VibeDataset(Dataset):
         elif self.dataset == '3dpw':
             db = self.load_db_3dpw(split)
         elif self.dataset == 'nemomocap':
-            db = self.load_db_nemomocap(split, subsample=subsample)
+            db = self.load_db_nemomocap(split)
+        elif self.dataset == 'nemomocap2':
+            db = self.load_db_nemomocap(split, version=2)
         else:
             valid_datasets = ['amass', 'h36m', '3dpw']
             raise ValueEror(
@@ -593,12 +596,25 @@ class VibeDataset(Dataset):
         db = joblib.load(db_file)
         return db
 
-    def load_db_nemomocap(self, split, subsample=1):
-        db_file = osp.join(VIBE_DB_DIR, f'nemomocap_{split}_20230228_db.pt')
+    def load_db_nemomocap(self, split, version=1):
+        if version == 1:
+            db_file = osp.join(VIBE_DB_DIR, f'nemomocap_{split}_20230228_db.pt')
+        elif version == 2:
+            db_file = osp.join(VIBE_DB_DIR, f'nemomocap2_{split}_20230305_db.pt')
+        else:
+            raise ValueError('Unknown version of NeMo-MoCap dataset.')
         db = joblib.load(db_file)
-        db = self.subsample(db, subsample=subsample)
+        # db = self.subsample(db, subsample=subsample)
         db['trans'] = db['trans'].squeeze(1)
         return db
+
+    # DONT SUBSAMPLE NEMO ANYMORE
+    # def load_db_nemomocap(self, split, subsample=1):
+    #     db_file = osp.join(VIBE_DB_DIR, f'nemomocap_{split}_20230228_db.pt')
+    #     db = joblib.load(db_file)
+    #     db = self.subsample(db, subsample=subsample)
+    #     db['trans'] = db['trans'].squeeze(1)
+    #     return db
 
     def subsample(self, db, subsample=1):
         for k in db.keys():

@@ -815,6 +815,40 @@ def create_db(split):
 
     return final_dataset
 
+
+def create_db2(split):
+    """
+    split by action instead of index
+    """
+    if split == 'train':
+        actions = ['baseball_swing', 'tennis_serve']
+    if split == 'val':
+        actions = ['baseball_pitch', 'golf_swing', 'tennis_swing']
+    indices = np.arange(8)
+
+    seq_db_list = []
+
+    for action in actions:
+        for index in indices:
+            print(action, index)
+            db = process_sequence(action, index, viz=True)
+            seq_db_list.append(db)
+
+    dataset = defaultdict(list)
+    for seq_db in seq_db_list:
+        for k, v in seq_db.items():
+            dataset[k] += list(v)
+
+    final_dataset = {}
+    print(list(dataset.keys()))
+    for k, v in dataset.items():
+        print(k)
+        if len(v[0].shape) == 1:
+            v = [vi[:, None] for vi in v]
+        final_dataset[k] = np.vstack(v)
+
+    return final_dataset
+
 if __name__ == '__main__':
     """
     python -m VIBE.lib.data_utils.nemomocap_utils
@@ -864,6 +898,10 @@ if __name__ == '__main__':
     # db = process_sequence(args.action, args.index, viz=True)
     # ipdb.set_trace()
 
+    # for split in ['train', 'val']:
+    #     db = create_db(split)
+    #     joblib.dump(db, osp.join(VIBE_DB_DIR, f'nemomocap_{split}_20230228_db.pt'))
+
     for split in ['train', 'val']:
-        db = create_db(split)
-        joblib.dump(db, osp.join(VIBE_DB_DIR, f'nemomocap_{split}_20230228_db.pt'))
+        db = create_db2(split)
+        joblib.dump(db, osp.join(VIBE_DB_DIR, f'nemomocap2_{split}_20230305_db.pt'))
