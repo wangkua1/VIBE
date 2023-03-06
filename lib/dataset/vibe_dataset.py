@@ -127,7 +127,8 @@ class VibeDataset(Dataset):
 
         # for data_rep with foot contact, or xyz params, precompute those things
         if self.data_rep in ('rot6d_fc', 'rot6d_fc_shape',
-                             'rot6d_fc_shape_axyz', 'rot6d_fc_shape_axyz_avel'):
+                             'rot6d_fc_shape_axyz', 'rot6d_fc_shape_axyz_avel',
+                             'rot6d_ks', 'rot6d_ks2'):
             self.do_fc_mask = True
             self.compute_keypoint_data(foot_vel_threshold)
         else:
@@ -250,8 +251,6 @@ class VibeDataset(Dataset):
         thetas = torch.tensor(self.db[pose_key]).to(
             self.device).float()  # pose and beta
         transes = torch.tensor(self.db['trans']).to(self.device).float()
-        # if self.dataset=='amass':
-            # import ipdb; ipdb.set_trace()
 
         if self.dataset in ('amass', 'amass_hml'):
             self.db['shape'] = thetas[:, -10:].cpu().numpy()
@@ -366,6 +365,22 @@ class VibeDataset(Dataset):
         target_vel_abs, target_vel_xyz_abs = comptue_velocity(target_xyz_abs)
         target_vel_rel, target_vel_xyz_rel = comptue_velocity(target_xyz_rel)
 
+        def compute_accel(target_xyz):
+            # estimate using central finite difference
+            target_accel_xyz = target_xyz[:-2] + target_xyz[
+                2:] - 2 * target_xyz[1:-1]
+            # pad the start and end of this sequence
+            target_accel_xyz = torch.cat(
+                (target_accel_xyz[[0]], target_accel_xyz,
+                 target_accel_xyz[[-1]]), 0)
+            # norm of accel vector
+            target_accel = torch.linalg.norm(target_accel_xyz,
+                                             axis=-1)  # (N,24)
+
+            return target_accel, target_accel_xyz
+
+        target_accel_abs, target_accel_xyz_abs = compute_accel(target_xyz_abs)
+
         # get foot contact data by estimating velocity and thresholding
         def estimate_foot_contact(target_vel, foot_vel_threshold):
             l_ankle_idx, r_ankle_idx, l_foot_idx, r_foot_idx = 7, 8, 10, 11
@@ -388,16 +403,62 @@ class VibeDataset(Dataset):
             foot_vel, fc_mask = estimate_foot_contact(target_vel_abs,
                                                       foot_vel_threshold)
 
-        self.db['foot_vel'] = foot_vel  # (N,4,3)
+        def compute_angular_velocity(pose_6d_):
+            pose_6d = pose_6d_.clone()
+            N, J, D = pose_6d.shape
+            assert (J, D) == (25, 6)
+            pose_6d = pose_6d[:, :-1].reshape(N, 24 * 6)  # remove translation
+            angular_vel = pose_6d[1:] - pose_6d[:-1]
+            angular_vel = torch.cat((angular_vel, angular_vel[[-1]]), 0)
+            return angular_vel
+
+        angular_vel = compute_angular_velocity(self.db['pose_6d'])
+
+        def clean_vid_boundaries(val, order=1):
+            """ 
+            Vel and accel were computed by treated all the videos as one big
+            concatted sequence. This causes erroneous spikes at video boundaries.
+            This function 
+
+            Args:
+                accel: special case where 3 points are sampled. 
+            """
+            # identify vid boundaries
+            vid_name = self.db['vid_name']
+            if vid_name.ndim == 2: vid_name = vid_name[:, 0]
+            idxs_end = np.where(vid_name[:-1] != vid_name[1:])[0]  #
+            idxs_start = np.hstack((np.array([0]), idxs_end + 1))
+            # order 1 finite difference, e.g. velocity
+            if order == 1:
+                val[idxs_end] = val[idxs_end - 1]
+            # order 2 finite difference, e.g. acceleration
+            elif order == 2:
+                val[idxs_end] = val[idxs_end - 1]
+                val[idxs_start] = val[idxs_start + 1]
+            else:
+                raise
+            return val
+
+        self.db['foot_vel'] = clean_vid_boundaries(foot_vel,
+                                                   order=1)  # (N,4,3)
         self.db['fc_mask'] = fc_mask  # (N,4,3)
 
         # save positions & velocities
-        self.db['xyz_abs'] = target_xyz_abs  # (N,24,3) #
-        self.db['vel_abs'] = target_vel_xyz_abs  # (N,24,3)
+        self.db['xyz_abs'] = clean_vid_boundaries(target_xyz_abs,
+                                                  order=1)  # (N,24,3) #
+        self.db['vel_abs'] = clean_vid_boundaries(target_vel_xyz_abs,
+                                                  order=1)  # (N,24,3)
 
-        # relative xyz cannot use the target_xyz from above: needs to use the 
-        # positions adjusted to the root orientation: 
+        # relative xyz cannot use the target_xyz from above: needs to use the
+        # positions adjusted to the root orientation:
         self.db['xyz_rel'] = self._get_relative_motion(self.db['pose_6d'])
+
+        # acceleration
+        self.db['accel_abs'] = clean_vid_boundaries(target_accel_xyz_abs,
+                                                    order=2)
+
+        # angular velocity
+        self.db['angular_vel'] = clean_vid_boundaries(angular_vel, order=1)
 
         ## Warning: if using `xyz_abs` in representation, need to translate
         # points so that the root starts at (0,0,0). Not necessary for `vel_abs`.
@@ -639,11 +700,11 @@ class VibeDataset(Dataset):
             to be applied to both "pose" and "cv_pose".
             """
             pose6d = pose6d.permute(1, 2, 0)  # (25,6,T)
-            
+
             if self.normalize_translation:
                 # has format (J,6,T). translation is the last joint (dim 0)
                 pose6d[-1, :, :] = pose6d[-1, :, :] - pose6d[-1, :, [0]]
-            else: 
+            else:
                 raise "Not normalizing translation is probably a bad idea"
 
             # rotation augmentation about y (vertical) axis
@@ -657,44 +718,51 @@ class VibeDataset(Dataset):
             # flatten dims 1,2: (N,26,6,T) --> (N,150,1,T). And add foot contact
             if self.data_rep in ('rot6d_fc', 'rot6d_fc_shape',
                                  'rot6d_fc_shape_axyz',
-                                 'rot6d_fc_shape_axyz_avel'):
+                                 'rot6d_fc_shape_axyz_avel', 'rot6d_ks'):
                 fc_mask = self.db['fc_mask'][start_index:end_index +
                                              1]  # (T,4)
                 pose6d = torch.cat((pose6d.view(T, J * D), fc_mask),
                                    1).unsqueeze(2)  # (T,154,1)
 
             if self.data_rep in ("rot6d_fc_shape", 'rot6d_fc_shape_axyz',
-                                 "rot6d_fc_shape_axyz_avel"):
+                                 "rot6d_fc_shape_axyz_avel", 'rot6d_ks'):
                 shape = torch.from_numpy(
                     self.db['shape'][start_index:end_index + 1])  # (T,10)
                 pose6d = torch.cat((pose6d, shape.unsqueeze(2)),
                                    dim=1)  # (T,164,1)
 
             if self.data_rep in ("rot6d_fc_shape_axyz",
-                                 "rot6d_fc_shape_axyz_avel"):
-                # Note: 0th joint of `xyz_abs` is the same as the 25th joint of 
+                                 "rot6d_fc_shape_axyz_avel", 'rot6d_ks'):
+                # Note: 0th joint of `xyz_abs` is the same as the 25th joint of
                 # the rot6d rep ... so this data will be duplictaed
 
                 # clone to avoid inplace modifying when shifting translation.
-                xyz_abs = torch.clone(self.db['xyz_abs'][start_index:end_index +
-                                             1])  # (T,24,3)
+                xyz_abs = torch.clone(
+                    self.db['xyz_abs'][start_index:end_index + 1])  # (T,24,3)
                 # shift so that frame 0 is centered
                 if self.normalize_translation:
                     # so that the root joint is at the origin at time 0
-                    xyz_abs_root = xyz_abs[:,[0]]
+                    xyz_abs_root = xyz_abs[:, [0]]
                     xyz_abs = xyz_abs - xyz_abs_root[[0]]
-                    assert xyz_abs[0,0].sum().item()==0
-                
+                    assert xyz_abs[0, 0].sum().item() == 0
+
                 # reshape, etc
                 xyz_abs = xyz_abs.view(-1, 24 * 3, 1)
                 pose6d = torch.cat((pose6d, xyz_abs), dim=1)  # (T,236,1)
 
-            if self.data_rep == "rot6d_fc_shape_axyz_avel":
+            if self.data_rep in ("rot6d_fc_shape_axyz_avel", 'rot6d_ks'):
                 # get velocity, flatten and add to the thing
-                vel_abs = self.db['vel_abs'][start_index:end_index+1]
-                vel_abs = vel_abs.view(-1,24*3, 1)
+                vel_abs = self.db['vel_abs'][start_index:end_index + 1]
+                vel_abs = vel_abs.view(-1, 24 * 3, 1)
                 pose6d = torch.cat((pose6d, vel_abs), dim=1)  # (T,308,1)
+
+            if self.data_rep == 'rot6d_ks':
+                accel_abs = self.db['accel_abs'][start_index:end_index + 1]
+                accel_abs = accel_abs.view(T, 24 * 3, 1)
+                angular_vel = self.db['angular_vel'][start_index:end_index + 1]
+                angular_vel = angular_vel.unsqueeze(2)
                 
+                pose6d = torch.cat((pose6d, accel_abs, angular_vel), dim=1) # (560,524,1)
 
             pose6d = pose6d.permute(1, 2, 0)
 
@@ -755,9 +823,11 @@ class VibeDataset(Dataset):
 
             if 'shape' in self.db.keys():
                 # Prepare 'theta'
-                if self.dataset in ('amass','amass_hml'):
-                    pose = np.array(self.db['theta'][start_index:end_index + 1])
-                    pose = pose[...,:-10] # remove shape bc it will be added back
+                if self.dataset in ('amass', 'amass_hml'):
+                    pose = np.array(self.db['theta'][start_index:end_index +
+                                                     1])
+                    pose = pose[..., :
+                                -10]  # remove shape bc it will be added back
                 else:
                     pose = np.array(self.db['pose'][start_index:end_index + 1])
 
@@ -905,4 +975,3 @@ def rotate_about_D(motions, theta, D=1):
     motions_rotated[:, [-1], trans_axes] = trans_rotated
 
     return motions_rotated
-
