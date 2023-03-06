@@ -1,6 +1,6 @@
 # Some functions are borrowed from https://github.com/akanazawa/human_dynamics/blob/master/src/evaluation/eval_util.py
 # Adhere to their licence to use these functions
-
+import ipdb
 import torch
 import numpy as np
 from nemo.utils.misc_utils import to_np, to_tensor
@@ -133,6 +133,31 @@ def compute_error_verts(pred_verts, target_verts=None, target_theta=None):
     assert len(pred_verts) == len(target_verts)
     error_per_vert = np.sqrt(np.sum((target_verts - pred_verts) ** 2, axis=2))
     return np.mean(error_per_vert, axis=1)
+
+
+def f_target_vert(target_theta, target_trans):
+    N, T = target_theta.shape[:2]
+    B = N * T 
+    target_verts = theta_to_verts(target_theta.reshape(B, -1)).reshape(N, T, -1, 3)
+    target_verts += target_trans[:, :, None]
+    return target_verts
+
+def compute_error_g_verts(pred_verts, target_theta, target_trans):
+    """
+    Computes G-MPJPE over 6890 surface vertices.
+    Input:
+        pred_verts -- (N, T, 6890, 3)
+        target_theta -- (N, T, 85)
+        target_trans -- (N, T, 3)
+    Returns:
+        error_verts (N).
+    """
+    target_verts = f_target_vert(target_theta, target_trans)
+
+    assert len(pred_verts) == len(target_verts)
+    errors = compute_g_mpjpe(pred_verts, target_verts)
+    return errors
+
 
 
 def compute_similarity_transform(S1, S2):
