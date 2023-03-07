@@ -366,7 +366,7 @@ def compute_mpjpe(pred_j3ds, target_j3ds):
     pred_j3ds = to_tensor(pred_j3ds)
     target_j3ds = to_tensor(target_j3ds)
 
-    print(f'Evaluating on {pred_j3ds.shape[0]} number of poses...')
+    # print(f'Evaluating on {pred_j3ds.shape[0]} number of poses...')
     pred_pelvis = (pred_j3ds[:, [2], :] + pred_j3ds[:, [3], :]) / 2.0
     target_pelvis = (target_j3ds[:, [2], :] + target_j3ds[:, [3], :]) / 2.0
 
@@ -393,10 +393,10 @@ def compute_g_mpjpe(g_pred_j3ds, g_target_j3ds):
     # g_pred_j3ds = to_tensor(g_pred_j3ds)
     # g_target_j3ds = to_tensor(g_target_j3ds)
 
-    print(f'Evaluating on {g_pred_j3ds.shape[0]} number of sequences...')
+    # print(f'Evaluating on {g_pred_j3ds.shape[0]} number of sequences...')
 
     def g_mpjpe_per_sequence(g_pred, g_target):
-        R, t = rigid_transform_3D(g_pred.reshape(-1, 3), g_target.reshape(-1, 3))
+        R, t = rigid_transform_3D(g_pred.reshape(-1, 3), g_target.reshape(-1, 3),suppress_message=True)
         g_pred_transformed = apply_rigid_transform(g_pred, R, t)
         return np.sqrt(((g_pred_transformed - g_target)**2).sum(-1)).mean()
 
@@ -422,10 +422,10 @@ def compute_nemo_mpjpe(g_pred_j3ds, g_target_j3ds):
     # g_pred_j3ds = to_tensor(g_pred_j3ds)
     # g_target_j3ds = to_tensor(g_target_j3ds)
 
-    print(f'Evaluating on {g_pred_j3ds.shape[0]} number of sequences...')
+    # print(f'Evaluating on {g_pred_j3ds.shape[0]} number of sequences...')
 
     def g_mpjpe_per_transform(g_pred, g_target):
-        R, t = rigid_transform_3D(g_pred.reshape(-1, 3), g_target.reshape(-1, 3))
+        R, t = rigid_transform_3D(g_pred.reshape(-1, 3), g_target.reshape(-1, 3), suppress_message=True)
         g_pred_transformed = apply_rigid_transform(g_pred, R, t)
         return g_pred_transformed
 
