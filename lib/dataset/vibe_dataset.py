@@ -787,9 +787,6 @@ class VibeDataset(Dataset):
                     pose6d = torch.cat((pose6d, accel_abs, angular_vel),
                                        dim=1)  # (T,524,1)
 
-            else:
-                raise
-
             pose6d = pose6d.permute(1, 2, 0)  # (J,D,T)
 
             # if the data is smaller than self.num_frames, pad it with the last frame value
