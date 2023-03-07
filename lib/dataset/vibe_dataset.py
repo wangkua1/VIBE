@@ -787,9 +787,6 @@ class VibeDataset(Dataset):
                     pose6d = torch.cat((pose6d, accel_abs, angular_vel),
                                        dim=1)  # (T,524,1)
 
-            else:
-                raise
-
             pose6d = pose6d.permute(1, 2, 0)  # (J,D,T)
 
             # if the data is smaller than self.num_frames, pad it with the last frame value
@@ -922,6 +919,8 @@ def augment_world_to_camera(motions,
     In: (N,25,6,T)  rot6d. 
     Out: (N,25,6,T)
     """
+    #xrange = (0,0) # turn it off manually 
+    #yrange = (0,0)  # turn it off manually
 
     def sample_uniform(vmin, vmax, n_samples):
         return torch.rand(n_samples) * (vmax - vmin) + vmin
