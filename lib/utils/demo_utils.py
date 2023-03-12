@@ -227,11 +227,11 @@ def download_ckpt(outdir='data/vibe_data', use_3dpw=False):
     return ckpt_file
 
 
-def images_to_video(img_folder, output_vid_file):
+def images_to_video(img_folder, output_vid_file, fps=30):
     os.makedirs(img_folder, exist_ok=True)
 
     command = [
-        'ffmpeg', '-y', '-threads', '16', '-i', f'{img_folder}/%06d.png', '-profile:v', 'baseline',
+        'ffmpeg', '-y', '-threads', '16', '-r', f"{fps}", '-i', f'{img_folder}/%06d.png', '-profile:v', 'baseline',
         '-level', '3.0', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-an', '-v', 'error', output_vid_file,
     ]
 
