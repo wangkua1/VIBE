@@ -18,22 +18,27 @@ import argparse
 from yacs.config import CfgNode as CN
 import os
 import os.path as osp
+import socket 
 
 ROOT = osp.join(os.environ['BIO_POSE_ROOT'], 'VIBE')
 # CONSTANTS
-# You may modify them at will
-VIBE_DB_DIR = osp.join(ROOT, 'data/vibe_db')
-AMASS_DIR = osp.join(ROOT, 'data/amass')
-INSTA_DIR = osp.join(ROOT, 'data/insta_variety')
-MPII3D_DIR = osp.join(ROOT, 'data/mpi_inf_3dhp')
-THREEDPW_DIR = osp.join(ROOT, 'data/3dpw')
-PENNACTION_DIR = osp.join(ROOT, 'data/penn_action')
-POSETRACK_DIR = osp.join(ROOT, 'data/posetrack')
-H36M_DIR = osp.join(ROOT, 'data/h36m')
-VIBE_DATA_DIR = osp.join(ROOT, 'data/vibe_data')
-NEMO_DB_DIR = "/home/groups/syyeung/wangkua1/nemo/exps"
-
-
+if 'pasteur' in socket.gethostname():
+    VIBE_DATA_DIR = 'software/spin_data'
+    SMPL_DATA_DIR = 'software/smpl'
+else:
+    # You may modify them at will
+    VIBE_DB_DIR = osp.join(ROOT, 'data/vibe_db')
+    AMASS_DIR = osp.join(ROOT, 'data/amass')
+    INSTA_DIR = osp.join(ROOT, 'data/insta_variety')
+    MPII3D_DIR = osp.join(ROOT, 'data/mpi_inf_3dhp')
+    THREEDPW_DIR = osp.join(ROOT, 'data/3dpw')
+    PENNACTION_DIR = osp.join(ROOT, 'data/penn_action')
+    POSETRACK_DIR = osp.join(ROOT, 'data/posetrack')
+    H36M_DIR = osp.join(ROOT, 'data/h36m')
+    VIBE_DATA_DIR = osp.join(ROOT, 'data/vibe_data')
+    NEMO_DB_DIR = "/home/groups/syyeung/wangkua1/nemo/exps"
+    SMPL_DATA_DIR = VIBE_DATA_DIR
+    
 # Configuration variables
 cfg = CN()
 

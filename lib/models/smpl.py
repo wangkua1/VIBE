@@ -9,7 +9,7 @@ from smplx import SMPL as _SMPL
 from smplx.utils import  SMPLOutput
 from smplx.lbs import vertices2joints
 
-from lib.core.config import VIBE_DATA_DIR
+from lib.core.config import VIBE_DATA_DIR, SMPL_DATA_DIR
 
 # Taken from: https://github.com/vchoutas/smplx/blob/main/smplx/joint_names.py
 
@@ -99,7 +99,7 @@ JOINT_NAMES = [
 JOINT_IDS = {JOINT_NAMES[i]: i for i in range(len(JOINT_NAMES))}
 JOINT_REGRESSOR_TRAIN_EXTRA = osp.join(VIBE_DATA_DIR, 'J_regressor_extra.npy')
 SMPL_MEAN_PARAMS = osp.join(VIBE_DATA_DIR, 'smpl_mean_params.npz')
-SMPL_MODEL_DIR = VIBE_DATA_DIR
+SMPL_MODEL_DIR = SMPL_DATA_DIR
 H36M_TO_J17 = [6, 5, 4, 1, 2, 3, 16, 15, 14, 11, 12, 13, 8, 10, 0, 7, 9]
 H36M_TO_J14 = H36M_TO_J17[:14]
 
