@@ -130,7 +130,8 @@ class VibeDataset(Dataset):
         # for data_rep with foot contact, or xyz params, precompute those things
         if self.data_rep in ('rot6d_fc', 'rot6d_fc_shape',
                              'rot6d_fc_shape_axyz', 'rot6d_fc_shape_axyz_avel',
-                             'rot6d_ks', 'rot6d_ks_1', 'rot6d_ks_2'):
+                             "rot6d_fc_shape_axyz_avel2", 'rot6d_ks',
+                             'rot6d_ks_1', 'rot6d_ks_2'):
             self.do_fc_mask = True
             self.compute_keypoint_data(foot_vel_threshold)
         else:
@@ -442,7 +443,7 @@ class VibeDataset(Dataset):
             else:
                 raise
             return val
-        
+
         self.db['fc_mask'] = torch.tensor(fc_mask)  # (N,4,1)
 
         self.db['foot_vel'] = clean_vid_boundaries(foot_vel,
@@ -728,7 +729,8 @@ class VibeDataset(Dataset):
             # flatten dims 1,2: (N,26,6,T) --> (N,150,1,T). And add foot contact
             if self.data_rep in ('rot6d_fc', 'rot6d_fc_shape',
                                  'rot6d_fc_shape_axyz',
-                                 'rot6d_fc_shape_axyz_avel', 'rot6d_ks',
+                                 'rot6d_fc_shape_axyz_avel',
+                                 "rot6d_fc_shape_axyz_avel2", 'rot6d_ks',
                                  'rot6d_ks_1', 'rot6d_ks_2'):
                 fc_mask = self.db['fc_mask'][start_index:end_index +
                                              1]  # (T,4)
@@ -736,7 +738,8 @@ class VibeDataset(Dataset):
                                    1).unsqueeze(2)  # (T,154,1)
 
             if self.data_rep in ("rot6d_fc_shape", 'rot6d_fc_shape_axyz',
-                                 "rot6d_fc_shape_axyz_avel", 'rot6d_ks',
+                                 "rot6d_fc_shape_axyz_avel",
+                                 "rot6d_fc_shape_axyz_avel2", 'rot6d_ks',
                                  'rot6d_ks_1', 'rot6d_ks_2'):
                 shape = torch.from_numpy(
                     self.db['shape'][start_index:end_index + 1])  # (T,10)
@@ -744,7 +747,8 @@ class VibeDataset(Dataset):
                                    dim=1)  # (T,164,1)
 
             if self.data_rep in ("rot6d_fc_shape_axyz",
-                                 "rot6d_fc_shape_axyz_avel", 'rot6d_ks',
+                                 "rot6d_fc_shape_axyz_avel",
+                                 "rot6d_fc_shape_axyz_avel2", 'rot6d_ks',
                                  'rot6d_ks_1', 'rot6d_ks_2'):
                 # Note: 0th joint of `xyz_abs` is the same as the 25th joint of
                 # the rot6d rep ... so this data will be duplictaed
@@ -761,13 +765,19 @@ class VibeDataset(Dataset):
 
                 # reshape, concat
                 xyz_abs = xyz_abs.view(-1, 24 * 3, 1)
+                if self.data_rep == 'rot6d_fc_shape_axyz_avel2':
+                    xyz_abs = xyz_abs * 1000
+
                 pose6d = torch.cat((pose6d, xyz_abs), dim=1)  # (T,236,1)
 
-            if self.data_rep in ("rot6d_fc_shape_axyz_avel", 'rot6d_ks',
+            if self.data_rep in ("rot6d_fc_shape_axyz_avel",
+                                 "rot6d_fc_shape_axyz_avel2", 'rot6d_ks',
                                  'rot6d_ks_1', 'rot6d_ks_2'):
                 # get velocity, flatten and add to the thing
                 vel_abs = self.db['vel_abs'][start_index:end_index + 1]
                 vel_abs = vel_abs.view(-1, 24 * 3, 1)
+                if self.data_rep == 'rot6d_fc_shape_axyz_avel2':
+                    vel_abs = vel_abs * 1000
                 pose6d = torch.cat((pose6d, vel_abs), dim=1)  # (T,308,1)
 
             if 'rot6d_ks' in self.data_rep:
@@ -919,7 +929,8 @@ def augment_world_to_camera(motions,
     In: (N,25,6,T)  rot6d. 
     Out: (N,25,6,T)
     """
-    #xrange = (0,0) # turn it off manually 
+
+    #xrange = (0,0) # turn it off manually
     #yrange = (0,0)  # turn it off manually
 
     def sample_uniform(vmin, vmax, n_samples):
