@@ -816,6 +816,7 @@ class VibeDataset(Dataset):
             vid_name=vid_name,
         )
 
+
         if self.dataset != "amass_hml":
             # add features if the database has them
             if 'features' in self.db.keys():
@@ -842,6 +843,10 @@ class VibeDataset(Dataset):
             if 'pose_original' in self.db.keys():
                 ret['pose_original'] = self.db['pose_original'][
                     start_index:end_index + 1]
+
+            if 'visible' in self.db.keys():
+                ret['visible'] = self.db['visible'][start_index:end_index+1]
+
 
             if self.dataset != 'amass_hml':  # hack
                 if 'trans' in self.db.keys():
